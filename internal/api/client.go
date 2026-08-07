@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -56,6 +57,20 @@ type NutritionRecord struct {
 	DeletedAt                     *time.Time        `json:"deleted_at"`
 }
 
+type ListNutritionRecordsOptions struct {
+	ConsumedFrom   time.Time
+	ConsumedBefore time.Time
+	IncludeDeleted bool
+	Cursor         string
+	Limit          int
+}
+
+type NutritionRecordPage struct {
+	Records    []NutritionRecord `json:"records"`
+	NextCursor *string           `json:"next_cursor"`
+	HasMore    bool              `json:"has_more"`
+}
+
 type APIError struct {
 	StatusCode int
 	Code       string
@@ -76,6 +91,9 @@ func (err *APIError) Error() string {
 	message := fmt.Sprintf("%s: %s", err.Code, err.Message)
 	for _, violation := range err.Violations {
 		message += fmt.Sprintf("; %s %s", violation.Field, violation.Reason)
+	}
+	if err.Retryable {
+		message += "; retryable=true"
 	}
 	return message
 }
@@ -144,12 +162,55 @@ func (client *Client) CreateNutritionRecord(ctx context.Context, request CreateR
 	return response.Record, nil
 }
 
-func (client *Client) CheckAuthentication(ctx context.Context) error {
-	var response struct {
-		Records []NutritionRecord `json:"records"`
-		HasMore bool              `json:"has_more"`
+func (client *Client) ListNutritionRecords(ctx context.Context, options ListNutritionRecordsOptions) (NutritionRecordPage, error) {
+	if options.ConsumedFrom.IsZero() {
+		return NutritionRecordPage{}, errors.New("consumed-from is required")
 	}
-	return client.do(ctx, http.MethodGet, "/v1/nutrition-records?limit=1", nil, true, http.StatusOK, &response)
+	if options.ConsumedBefore.IsZero() {
+		return NutritionRecordPage{}, errors.New("consumed-before is required")
+	}
+	if !options.ConsumedFrom.Before(options.ConsumedBefore) {
+		return NutritionRecordPage{}, errors.New("consumed-from must be earlier than consumed-before")
+	}
+	if options.Limit < 1 || options.Limit > 100 {
+		return NutritionRecordPage{}, errors.New("limit must be between 1 and 100")
+	}
+
+	query := url.Values{}
+	query.Set("consumedFrom", options.ConsumedFrom.Format(time.RFC3339Nano))
+	query.Set("consumedBefore", options.ConsumedBefore.Format(time.RFC3339Nano))
+	query.Set("limit", strconv.Itoa(options.Limit))
+	if options.IncludeDeleted {
+		query.Set("includeDeleted", "true")
+	}
+	if options.Cursor != "" {
+		query.Set("cursor", options.Cursor)
+	}
+
+	var response struct {
+		Records    *[]NutritionRecord `json:"records"`
+		NextCursor *string            `json:"next_cursor"`
+		HasMore    *bool              `json:"has_more"`
+	}
+	path := "/v1/nutrition-records?" + query.Encode()
+	if err := client.do(ctx, http.MethodGet, path, nil, true, http.StatusOK, &response); err != nil {
+		return NutritionRecordPage{}, err
+	}
+	if response.Records == nil || response.HasMore == nil {
+		return NutritionRecordPage{}, errors.New("server returned an incomplete nutrition record page")
+	}
+	if *response.HasMore && (response.NextCursor == nil || *response.NextCursor == "") {
+		return NutritionRecordPage{}, errors.New("server returned has_more without a next_cursor")
+	}
+	return NutritionRecordPage{
+		Records:    *response.Records,
+		NextCursor: response.NextCursor,
+		HasMore:    *response.HasMore,
+	}, nil
+}
+
+func (client *Client) CheckAuthentication(ctx context.Context) error {
+	return client.do(ctx, http.MethodGet, "/v1/nutrients", nil, true, http.StatusOK, nil)
 }
 
 func (client *Client) do(ctx context.Context, method, path string, body any, authenticated bool, expectedStatus int, output any) error {

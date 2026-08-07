@@ -13,6 +13,18 @@ import (
 
 const defaultServer = "https://xxnian.site/sateia-server"
 
+const rootDescription = `Sateia writes server-side nutrition records that can be synchronized to the
+Sateia app.
+
+Quick start:
+  1. In the Sateia app, open Settings > CLI Access and create a code.
+  2. Run "sateia auth login" and enter the same device name and code.
+  3. Run "sateia auth status" to verify the credential.
+  4. Run "sateia record create --help" before the first write.
+
+For headless automation, set SATEIA_TOKEN instead of running interactive login.
+Run "sateia environment" for credential storage, precedence, and agent guidance.`
+
 type application struct {
 	version string
 	in      io.Reader
@@ -31,8 +43,15 @@ func New(version string, in io.Reader, out, errOut io.Writer) *cobra.Command {
 		store:   credential.KeyringStore{},
 	}
 	root := &cobra.Command{
-		Use:           "sateia",
-		Short:         "Write nutrition records to Sateia",
+		Use:   "sateia",
+		Short: "Write nutrition records to Sateia",
+		Long:  rootDescription,
+		Example: `  # Interactive authentication
+  sateia auth login
+  sateia auth status
+
+  # Inspect the write contract
+  sateia record create --help`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		Version:       version,
@@ -41,7 +60,7 @@ func New(version string, in io.Reader, out, errOut io.Writer) *cobra.Command {
 	root.SetOut(out)
 	root.SetErr(errOut)
 	root.PersistentFlags().StringVar(&app.server, "server", "", "Sateia API base URL (or SATEIA_SERVER)")
-	root.AddCommand(app.newAuthCommand(), app.newRecordCommand())
+	root.AddCommand(app.newAuthCommand(), app.newRecordCommand(), app.newEnvironmentCommand())
 	return root
 }
 

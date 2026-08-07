@@ -7,6 +7,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/xxnian95/sateia-cli/internal/api"
@@ -17,7 +18,15 @@ import (
 var pairingCodePattern = regexp.MustCompile(`^[A-HJ-KM-NP-Z2-9]{4}-[A-HJ-KM-NP-Z2-9]{4}$`)
 
 func (app *application) newAuthCommand() *cobra.Command {
-	command := &cobra.Command{Use: "auth", Short: "Manage authentication"}
+	command := &cobra.Command{
+		Use:   "auth",
+		Short: "Manage authentication",
+		Long: `Manage the CLI credential used for Sateia API requests.
+
+Interactive login exchanges an app-issued, five-minute code for an independent
+CLI token. Headless agents may provide SATEIA_TOKEN instead. Run
+"sateia environment" for storage and precedence details.`,
+	}
 	command.AddCommand(app.newLoginCommand(), app.newStatusCommand(), app.newLogoutCommand())
 	return command
 }
@@ -28,7 +37,18 @@ func (app *application) newLoginCommand() *cobra.Command {
 	command := &cobra.Command{
 		Use:   "login",
 		Short: "Exchange an app-issued device code for a CLI token",
-		Args:  cobra.NoArgs,
+		Long: `Exchange a five-minute, single-use code for a CLI token.
+
+Create the code in Sateia app > Settings > CLI Access. The device name entered
+in this command must exactly match the name used by the app when creating the
+code. Without flags, the command prompts for both values. The token is stored
+in the operating system credential store and is never printed.`,
+		Example: `  # Interactive login
+  sateia auth login
+
+  # Non-interactive code exchange; the code is short-lived, not the token
+  sateia auth login --device-code ABCD-EFGH --device-name "Pengnian Mac"`,
+		Args: cobra.NoArgs,
 		RunE: func(command *cobra.Command, _ []string) error {
 			baseURL, stored, err := app.baseURL()
 			if err != nil {
@@ -82,7 +102,7 @@ func (app *application) newLoginCommand() *cobra.Command {
 			}
 			issued, err := client.ExchangePairingCode(command.Context(), deviceCode, deviceName)
 			if err != nil {
-				return err
+				return loginErrorWithGuidance(err)
 			}
 			if err := app.store.Set(baseURL, issued.Token); err != nil {
 				return fmt.Errorf("store token in system credential store: %w; the code was consumed, so create a new code and retry", err)
@@ -95,12 +115,19 @@ func (app *application) newLoginCommand() *cobra.Command {
 				_ = app.store.Delete(baseURL)
 				return err
 			}
-			fmt.Fprintf(app.out, "Logged in to %s as %s. Token expires %s.\n", baseURL, deviceName, issued.ExpiresAt.Format("2006-01-02 15:04 MST"))
+			fmt.Fprintf(app.out, `Authentication succeeded.
+server: %s
+device_name: %s
+token_id: %s
+token_expires_at: %s
+credential_source: system keyring
+Next: run "sateia auth status" to verify the stored credential.
+`, baseURL, deviceName, issued.TokenID, issued.ExpiresAt.Format(time.RFC3339))
 			return nil
 		},
 	}
 	command.Flags().StringVar(&deviceCode, "device-code", "", "one-time code displayed by the Sateia app")
-	command.Flags().StringVar(&deviceName, "device-name", "", "name shown in the Sateia app (default: hostname)")
+	command.Flags().StringVar(&deviceName, "device-name", "", "exact name used to create the code (default: prompt with hostname)")
 	return command
 }
 
@@ -108,7 +135,11 @@ func (app *application) newStatusCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:   "status",
 		Short: "Verify the current token",
-		Args:  cobra.NoArgs,
+		Long: `Verify the effective credential with a read-only API request.
+
+SATEIA_TOKEN takes precedence over the system credential store. This command
+does not reveal the token secret and does not write nutrition data.`,
+		Args: cobra.NoArgs,
 		RunE: func(command *cobra.Command, _ []string) error {
 			baseURL, stored, err := app.baseURL()
 			if err != nil {
@@ -126,13 +157,13 @@ func (app *application) newStatusCommand() *cobra.Command {
 				return err
 			}
 			if err := client.CheckAuthentication(command.Context()); err != nil {
-				return fmt.Errorf("authentication check failed: %w", err)
+				return authenticationCheckError(err, source)
 			}
-			fmt.Fprintf(app.out, "Authenticated to %s using %s credentials", baseURL, source)
+			fmt.Fprintf(app.out, "Authentication verified.\nserver: %s\ncredential_source: %s\n", baseURL, source)
 			if source == "keyring" && stored.ExpiresAt != nil {
-				fmt.Fprintf(app.out, "; token expires %s", stored.ExpiresAt.Format("2006-01-02 15:04 MST"))
+				fmt.Fprintf(app.out, "token_expires_at: %s\n", stored.ExpiresAt.Format(time.RFC3339))
 			}
-			fmt.Fprintln(app.out, ".")
+			fmt.Fprintln(app.out, `Next: run "sateia record create --help" before writing a record.`)
 			return nil
 		},
 	}
@@ -142,7 +173,11 @@ func (app *application) newLogoutCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:   "logout",
 		Short: "Remove the stored CLI token",
-		Args:  cobra.NoArgs,
+		Long: `Remove the token from the local operating system credential store.
+
+This does not revoke the token on the server. Revoke the CLI token in the
+Sateia app when the credential must become invalid everywhere.`,
+		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
 			if os.Getenv("SATEIA_TOKEN") != "" {
 				return errors.New("SATEIA_TOKEN is set in the environment; unset it to log out")
@@ -160,8 +195,36 @@ func (app *application) newLogoutCommand() *cobra.Command {
 			if err := config.Save(stored); err != nil {
 				return err
 			}
-			fmt.Fprintf(app.out, "Logged out from %s.\n", baseURL)
+			fmt.Fprintf(app.out, `Local authentication removed.
+server: %s
+To invalidate the token on the server, revoke it in Sateia app > Settings > CLI Access.
+`, baseURL)
 			return nil
 		},
 	}
+}
+
+func loginErrorWithGuidance(err error) error {
+	var apiErr *api.APIError
+	if errors.As(err, &apiErr) {
+		switch apiErr.Code {
+		case "INVALID_PAIRING_CODE":
+			return fmt.Errorf("%w\nNext: create a new code in Sateia app > Settings > CLI Access and retry with the exact same device name", err)
+		case "RATE_LIMIT_EXCEEDED":
+			return fmt.Errorf("%w\nNext: wait before creating a new code and retrying", err)
+		}
+	}
+	return err
+}
+
+func authenticationCheckError(err error, source string) error {
+	wrapped := fmt.Errorf("authentication check failed: %w", err)
+	var apiErr *api.APIError
+	if !errors.As(err, &apiErr) || apiErr.Code != "UNAUTHENTICATED" {
+		return wrapped
+	}
+	if source == "environment" {
+		return fmt.Errorf("%w\nNext: replace or unset SATEIA_TOKEN, then run \"sateia auth status\" again", wrapped)
+	}
+	return fmt.Errorf("%w\nNext: run \"sateia auth logout\", create a new app code, and run \"sateia auth login\"", wrapped)
 }
