@@ -1,9 +1,9 @@
 # Sateia CLI
 
-`sateia` is the public command-line client for writing nutrition records to a
-Sateia server. It exchanges a short-lived code displayed by the Sateia app for
-an independently revocable CLI token, stores that token in the operating
-system credential store, and uses it as a Bearer token for record writes.
+`sateia` is the public command-line client for querying and writing nutrition
+records on a Sateia server. It exchanges a short-lived code displayed by the
+Sateia app for an independently revocable CLI token, stores that token in the
+operating system credential store, and uses it as a Bearer token for requests.
 
 ## Install from source
 
@@ -47,6 +47,24 @@ Automation can provide a token through `SATEIA_TOKEN`; the environment takes
 precedence over the credential store. Do not pass tokens as command-line flags,
 where they can be exposed through shell history or process inspection.
 
+## List records
+
+Query one page in an explicit consumed-time window:
+
+```sh
+sateia record list \
+  --consumed-from 2026-08-01T00:00:00+08:00 \
+  --consumed-before 2026-08-08T00:00:00+08:00 \
+  --limit 50 \
+  --json
+```
+
+The lower bound is inclusive and the upper bound is exclusive. Results are
+newest first. Deleted records are excluded unless `--include-deleted` is set.
+If `has_more` is true, repeat the command with exactly the same filters and add
+`--cursor` with the returned `next_cursor`. The CLI deliberately fetches one
+page at a time so automation retains control of limits and retries.
+
 ## Create a record
 
 ```sh
@@ -61,7 +79,8 @@ sateia record create \
 `--consumed-at` accepts an RFC 3339 timestamp and defaults to the current time.
 The timestamp's UTC offset is preserved as the record's local-day offset.
 
-Use `--json` for structured output:
+Use `--json` for structured output containing both `mutation_id` and the created
+record:
 
 ```sh
 sateia record create \
@@ -89,7 +108,16 @@ development. `SATEIA_CONFIG_DIR` can relocate the non-secret configuration
 directory for isolated environments and tests.
 
 Run `sateia --help` or `sateia <command> --help` for the complete command
-reference.
+reference. Run `sateia environment` for credential precedence, storage, and a
+safe agent workflow.
+
+## Agent skill
+
+The repository includes a product-neutral agent skill at
+[`skills/use-sateia-cli/SKILL.md`](skills/use-sateia-cli/SKILL.md). Agents should
+use it for authentication, nutrition record queries and pagination, record
+writes, output interpretation, and idempotent failure recovery. The skill
+treats live CLI help as the authoritative command contract.
 
 ## Development
 

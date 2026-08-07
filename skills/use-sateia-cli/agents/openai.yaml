@@ -1,0 +1,4 @@
+interface:
+  display_name: "Use Sateia CLI"
+  short_description: "Query and write nutrition records with Sateia"
+  default_prompt: "Use $use-sateia-cli to authenticate and safely query or write nutrition records."
