@@ -17,11 +17,17 @@ import (
 
 const clientType = "CLI"
 
+const maxResponseRequestIDLength = 128
+
 type Client struct {
 	baseURL    string
 	token      string
 	version    string
 	httpClient *http.Client
+}
+
+type ResponseMetadata struct {
+	RequestID string `json:"request_id"`
 }
 
 type IssuedToken struct {
@@ -77,6 +83,7 @@ type APIError struct {
 	Message    string
 	Retryable  bool
 	Violations []FieldViolation
+	RequestID  string
 }
 
 type FieldViolation struct {
@@ -85,15 +92,20 @@ type FieldViolation struct {
 }
 
 func (err *APIError) Error() string {
+	var message string
 	if err.Code == "" {
-		return fmt.Sprintf("server returned HTTP %d", err.StatusCode)
+		message = fmt.Sprintf("server returned HTTP %d", err.StatusCode)
+	} else {
+		message = fmt.Sprintf("%s: %s", err.Code, err.Message)
 	}
-	message := fmt.Sprintf("%s: %s", err.Code, err.Message)
 	for _, violation := range err.Violations {
 		message += fmt.Sprintf("; %s %s", violation.Field, violation.Reason)
 	}
 	if err.Retryable {
 		message += "; retryable=true"
+	}
+	if err.RequestID != "" {
+		message += "; request_id=" + err.RequestID
 	}
 	return message
 }
@@ -134,46 +146,48 @@ func NormalizeBaseURL(raw string) (string, error) {
 	return strings.TrimRight(parsed.String(), "/"), nil
 }
 
-func (client *Client) ExchangePairingCode(ctx context.Context, deviceCode, deviceName string) (IssuedToken, error) {
+func (client *Client) ExchangePairingCode(ctx context.Context, deviceCode, deviceName string) (IssuedToken, ResponseMetadata, error) {
 	body := struct {
 		DeviceCode string `json:"device_code"`
 		DeviceName string `json:"device_name"`
 	}{DeviceCode: deviceCode, DeviceName: deviceName}
 	var response IssuedToken
-	if err := client.do(ctx, http.MethodPost, "/v1/cli-pairing-codes:exchange", body, false, http.StatusCreated, &response); err != nil {
-		return IssuedToken{}, err
+	metadata, err := client.do(ctx, http.MethodPost, "/v1/cli-pairing-codes:exchange", body, false, http.StatusCreated, &response)
+	if err != nil {
+		return IssuedToken{}, metadata, err
 	}
 	if response.Token == "" || response.TokenID == "" || response.ExpiresAt.IsZero() {
-		return IssuedToken{}, errors.New("server returned an incomplete CLI token")
+		return IssuedToken{}, metadata, responseMetadataError(metadata, errors.New("server returned an incomplete CLI token"))
 	}
-	return response, nil
+	return response, metadata, nil
 }
 
-func (client *Client) CreateNutritionRecord(ctx context.Context, request CreateRecordRequest) (NutritionRecord, error) {
+func (client *Client) CreateNutritionRecord(ctx context.Context, request CreateRecordRequest) (NutritionRecord, ResponseMetadata, error) {
 	var response struct {
 		Record NutritionRecord `json:"record"`
 	}
-	if err := client.do(ctx, http.MethodPost, "/v1/nutrition-records", request, true, http.StatusCreated, &response); err != nil {
-		return NutritionRecord{}, err
+	metadata, err := client.do(ctx, http.MethodPost, "/v1/nutrition-records", request, true, http.StatusCreated, &response)
+	if err != nil {
+		return NutritionRecord{}, metadata, err
 	}
 	if response.Record.RecordID == "" || response.Record.Version < 1 {
-		return NutritionRecord{}, errors.New("server returned an incomplete nutrition record")
+		return NutritionRecord{}, metadata, responseMetadataError(metadata, errors.New("server returned an incomplete nutrition record"))
 	}
-	return response.Record, nil
+	return response.Record, metadata, nil
 }
 
-func (client *Client) ListNutritionRecords(ctx context.Context, options ListNutritionRecordsOptions) (NutritionRecordPage, error) {
+func (client *Client) ListNutritionRecords(ctx context.Context, options ListNutritionRecordsOptions) (NutritionRecordPage, ResponseMetadata, error) {
 	if options.ConsumedFrom.IsZero() {
-		return NutritionRecordPage{}, errors.New("consumed-from is required")
+		return NutritionRecordPage{}, ResponseMetadata{}, errors.New("consumed-from is required")
 	}
 	if options.ConsumedBefore.IsZero() {
-		return NutritionRecordPage{}, errors.New("consumed-before is required")
+		return NutritionRecordPage{}, ResponseMetadata{}, errors.New("consumed-before is required")
 	}
 	if !options.ConsumedFrom.Before(options.ConsumedBefore) {
-		return NutritionRecordPage{}, errors.New("consumed-from must be earlier than consumed-before")
+		return NutritionRecordPage{}, ResponseMetadata{}, errors.New("consumed-from must be earlier than consumed-before")
 	}
 	if options.Limit < 1 || options.Limit > 100 {
-		return NutritionRecordPage{}, errors.New("limit must be between 1 and 100")
+		return NutritionRecordPage{}, ResponseMetadata{}, errors.New("limit must be between 1 and 100")
 	}
 
 	query := url.Values{}
@@ -193,38 +207,39 @@ func (client *Client) ListNutritionRecords(ctx context.Context, options ListNutr
 		HasMore    *bool              `json:"has_more"`
 	}
 	path := "/v1/nutrition-records?" + query.Encode()
-	if err := client.do(ctx, http.MethodGet, path, nil, true, http.StatusOK, &response); err != nil {
-		return NutritionRecordPage{}, err
+	metadata, err := client.do(ctx, http.MethodGet, path, nil, true, http.StatusOK, &response)
+	if err != nil {
+		return NutritionRecordPage{}, metadata, err
 	}
 	if response.Records == nil || response.HasMore == nil {
-		return NutritionRecordPage{}, errors.New("server returned an incomplete nutrition record page")
+		return NutritionRecordPage{}, metadata, responseMetadataError(metadata, errors.New("server returned an incomplete nutrition record page"))
 	}
 	if *response.HasMore && (response.NextCursor == nil || *response.NextCursor == "") {
-		return NutritionRecordPage{}, errors.New("server returned has_more without a next_cursor")
+		return NutritionRecordPage{}, metadata, responseMetadataError(metadata, errors.New("server returned has_more without a next_cursor"))
 	}
 	return NutritionRecordPage{
 		Records:    *response.Records,
 		NextCursor: response.NextCursor,
 		HasMore:    *response.HasMore,
-	}, nil
+	}, metadata, nil
 }
 
-func (client *Client) CheckAuthentication(ctx context.Context) error {
+func (client *Client) CheckAuthentication(ctx context.Context) (ResponseMetadata, error) {
 	return client.do(ctx, http.MethodGet, "/v1/nutrients", nil, true, http.StatusOK, nil)
 }
 
-func (client *Client) do(ctx context.Context, method, path string, body any, authenticated bool, expectedStatus int, output any) error {
+func (client *Client) do(ctx context.Context, method, path string, body any, authenticated bool, expectedStatus int, output any) (ResponseMetadata, error) {
 	var requestBody io.Reader
 	if body != nil {
 		encoded, err := json.Marshal(body)
 		if err != nil {
-			return fmt.Errorf("encode request: %w", err)
+			return ResponseMetadata{}, fmt.Errorf("encode request: %w", err)
 		}
 		requestBody = bytes.NewReader(encoded)
 	}
 	request, err := http.NewRequestWithContext(ctx, method, client.baseURL+path, requestBody)
 	if err != nil {
-		return fmt.Errorf("create request: %w", err)
+		return ResponseMetadata{}, fmt.Errorf("create request: %w", err)
 	}
 	request.Header.Set("Accept", "application/json")
 	request.Header.Set("Sateia-Client-Type", clientType)
@@ -234,27 +249,56 @@ func (client *Client) do(ctx context.Context, method, path string, body any, aut
 	}
 	if authenticated {
 		if client.token == "" {
-			return errors.New("authentication token is required")
+			return ResponseMetadata{}, errors.New("authentication token is required")
 		}
 		request.Header.Set("Authorization", "Bearer "+client.token)
 	}
 
 	response, err := client.httpClient.Do(request)
 	if err != nil {
-		return fmt.Errorf("request failed: %w", err)
+		return ResponseMetadata{}, fmt.Errorf("request failed: %w", err)
 	}
 	defer response.Body.Close()
+	metadata := ResponseMetadata{RequestID: responseRequestID(response.Header.Get("X-Request-ID"))}
 	limited := io.LimitReader(response.Body, 2<<20)
 	if response.StatusCode != expectedStatus {
-		return decodeAPIError(response.StatusCode, limited)
+		err := decodeAPIError(response.StatusCode, limited)
+		if apiErr, ok := err.(*APIError); ok {
+			apiErr.RequestID = metadata.RequestID
+		}
+		return metadata, err
 	}
 	if output == nil {
-		return nil
+		return metadata, nil
 	}
 	if err := json.NewDecoder(limited).Decode(output); err != nil {
-		return fmt.Errorf("decode response: %w", err)
+		return metadata, responseMetadataError(metadata, fmt.Errorf("decode response: %w", err))
 	}
-	return nil
+	return metadata, nil
+}
+
+func responseMetadataError(metadata ResponseMetadata, err error) error {
+	if metadata.RequestID == "" {
+		return err
+	}
+	return fmt.Errorf("%w; request_id=%s", err, metadata.RequestID)
+}
+
+func responseRequestID(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" || len(value) > maxResponseRequestIDLength {
+		return ""
+	}
+	for _, character := range value {
+		if character >= 'a' && character <= 'z' ||
+			character >= 'A' && character <= 'Z' ||
+			character >= '0' && character <= '9' ||
+			strings.ContainsRune("._/-", character) {
+			continue
+		}
+		return ""
+	}
+	return value
 }
 
 func decodeAPIError(statusCode int, body io.Reader) error {

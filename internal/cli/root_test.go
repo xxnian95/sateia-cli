@@ -40,6 +40,7 @@ func TestRecordCreateEndToEndWithEnvironmentToken(t *testing.T) {
 			t.Error(err)
 		}
 		writer.Header().Set("Content-Type", "application/json")
+		writer.Header().Set("X-Request-ID", "request-create-human")
 		writer.WriteHeader(http.StatusCreated)
 		_, _ = writer.Write([]byte(`{"record":{"record_id":"014b2680-df5b-4c8d-97ef-abde0a9746d6","consumed_at":"2026-08-07T16:00:00+08:00","consumed_time_zone_offset_minutes":480,"nutrients":{"energy":"520","protein":"28.5","carbohydrate":"62","fat":"18"},"source":"CLI","note":"Pengnian lunch","version":1,"created_at":"2026-08-07T08:00:00Z","updated_at":"2026-08-07T08:00:00Z","deleted_at":null}}`))
 	}))
@@ -73,6 +74,7 @@ mutation_id: 3fe5867d-f8cb-48d4-90b2-529a15531db8
 version: 1
 source: CLI
 consumed_at: 2026-08-07T16:00:00+08:00
+request_id: request-create-human
 For machine-readable output, add --json.
 `
 	if got := output.String(); got != expected {
@@ -118,6 +120,7 @@ func TestHelpTeachesCompleteAgentWorkflow(t *testing.T) {
 			required: []string{
 				"non-negative decimal strings",
 				"ambiguous network failure",
+				"top-level request_id",
 				"--energy string",
 				"(required)",
 				"--json",
@@ -132,6 +135,7 @@ func TestHelpTeachesCompleteAgentWorkflow(t *testing.T) {
 				"--consumed-before",
 				"--include-deleted",
 				"same filters",
+				"top-level request_id",
 				"--json",
 			},
 		},
@@ -163,6 +167,7 @@ func TestEnvironmentCommandTeachesCredentialSafetyAndRetry(t *testing.T) {
 	if err := command.Execute(); err != nil {
 		t.Fatal(err)
 	}
+	normalizedOutput := strings.Join(strings.Fields(output.String()), " ")
 	for _, required := range []string{
 		"Precedence: SATEIA_TOKEN, SATEIA_TOKEN_FILE, then the system keyring",
 		"SATEIA_TOKEN_FILE",
@@ -172,8 +177,11 @@ func TestEnvironmentCommandTeachesCredentialSafetyAndRetry(t *testing.T) {
 		"both the printed --record-id and --mutation-id",
 		"top-level _notice list",
 		"SATEIA_NO_UPDATE_NOTIFIER",
+		"top-level request_id",
+		"structured logs",
+		"audit events",
 	} {
-		if !strings.Contains(output.String(), required) {
+		if !strings.Contains(normalizedOutput, required) {
 			t.Errorf("environment output does not contain %q", required)
 		}
 	}
@@ -232,6 +240,7 @@ func TestAuthStatusUsesTokenFileBeforeCredentialStore(t *testing.T) {
 			t.Errorf("unexpected authorization %q", request.Header.Get("Authorization"))
 		}
 		writer.Header().Set("Content-Type", "application/json")
+		writer.Header().Set("X-Request-ID", "request-auth-token-file")
 		_, _ = writer.Write([]byte(`{"nutrients":[]}`))
 	}))
 	defer server.Close()
@@ -251,6 +260,9 @@ func TestAuthStatusUsesTokenFileBeforeCredentialStore(t *testing.T) {
 	}
 	if !strings.Contains(output.String(), "credential_source: token_file") {
 		t.Fatalf("unexpected output: %s", output.String())
+	}
+	if !strings.Contains(output.String(), "request_id: request-auth-token-file") {
+		t.Fatalf("missing request ID: %s", output.String())
 	}
 }
 
@@ -371,6 +383,7 @@ func TestAuthLogoutExplainsUnavailableCredentialStore(t *testing.T) {
 func TestRecordCreateJSONIncludesMutationIdentifier(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		writer.Header().Set("Content-Type", "application/json")
+		writer.Header().Set("X-Request-ID", "request-create-json")
 		writer.WriteHeader(http.StatusCreated)
 		_, _ = writer.Write([]byte(`{"record":{"record_id":"014b2680-df5b-4c8d-97ef-abde0a9746d6","consumed_at":"2026-08-07T16:00:00+08:00","consumed_time_zone_offset_minutes":480,"nutrients":{"energy":"520","protein":"28.5","carbohydrate":"62","fat":"18"},"source":"CLI","note":null,"version":1,"created_at":"2026-08-07T08:00:00Z","updated_at":"2026-08-07T08:00:00Z","deleted_at":null}}`))
 	}))
@@ -393,6 +406,7 @@ func TestRecordCreateJSONIncludesMutationIdentifier(t *testing.T) {
 	}
 	var decoded struct {
 		MutationID string `json:"mutation_id"`
+		RequestID  string `json:"request_id"`
 		Record     struct {
 			RecordID string `json:"record_id"`
 		} `json:"record"`
@@ -400,7 +414,7 @@ func TestRecordCreateJSONIncludesMutationIdentifier(t *testing.T) {
 	if err := json.Unmarshal(output.Bytes(), &decoded); err != nil {
 		t.Fatal(err)
 	}
-	if decoded.MutationID != "3fe5867d-f8cb-48d4-90b2-529a15531db8" || decoded.Record.RecordID != "014b2680-df5b-4c8d-97ef-abde0a9746d6" {
+	if decoded.MutationID != "3fe5867d-f8cb-48d4-90b2-529a15531db8" || decoded.Record.RecordID != "014b2680-df5b-4c8d-97ef-abde0a9746d6" || decoded.RequestID != "request-create-json" {
 		t.Fatalf("unexpected output: %#v", decoded)
 	}
 }
@@ -481,11 +495,15 @@ func TestJSONResponseAlwaysIncludesNoticeList(t *testing.T) {
 	if string(decoded["_notice"]) != "[]" {
 		t.Fatalf("unexpected _notice: %s", decoded["_notice"])
 	}
+	if requestID, exists := decoded["request_id"]; !exists || string(requestID) != `""` {
+		t.Fatalf("unexpected request_id: %s (exists=%t)", requestID, exists)
+	}
 }
 
 func TestRecordCreateFailurePrintsIdempotentRetryCommand(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		writer.Header().Set("Content-Type", "application/json")
+		writer.Header().Set("X-Request-ID", "request-create-failure")
 		writer.WriteHeader(http.StatusServiceUnavailable)
 		_, _ = writer.Write([]byte(`{"error":{"code":"DATABASE_UNAVAILABLE","message":"Database unavailable","retryable":true}}`))
 	}))
@@ -506,6 +524,7 @@ func TestRecordCreateFailurePrintsIdempotentRetryCommand(t *testing.T) {
 	}
 	for _, required := range []string{
 		"retryable=true",
+		"request_id=request-create-failure",
 		"--record-id 014b2680-df5b-4c8d-97ef-abde0a9746d6",
 		"--mutation-id 3fe5867d-f8cb-48d4-90b2-529a15531db8",
 		"do not generate new IDs",
@@ -551,6 +570,7 @@ func TestRecordListJSONPreservesPagination(t *testing.T) {
 			t.Errorf("unexpected limit %q", request.URL.Query().Get("limit"))
 		}
 		writer.Header().Set("Content-Type", "application/json")
+		writer.Header().Set("X-Request-ID", "request-list-json")
 		_, _ = writer.Write([]byte(`{"records":[{"record_id":"014b2680-df5b-4c8d-97ef-abde0a9746d6","consumed_at":"2026-08-07T16:00:00+08:00","consumed_time_zone_offset_minutes":480,"nutrients":{"energy":"520","protein":"28.5","carbohydrate":"62","fat":"18"},"source":"CLI","note":"Pengnian lunch","version":1,"created_at":"2026-08-07T08:00:00Z","updated_at":"2026-08-07T08:00:00Z","deleted_at":null}],"next_cursor":"next-page","has_more":true}`))
 	}))
 	defer server.Close()
@@ -572,6 +592,7 @@ func TestRecordListJSONPreservesPagination(t *testing.T) {
 		Records    []json.RawMessage `json:"records"`
 		NextCursor *string           `json:"next_cursor"`
 		HasMore    bool              `json:"has_more"`
+		RequestID  string            `json:"request_id"`
 		Notices    []struct {
 			Code string `json:"code"`
 		} `json:"_notice"`
@@ -579,7 +600,7 @@ func TestRecordListJSONPreservesPagination(t *testing.T) {
 	if err := json.Unmarshal(output.Bytes(), &page); err != nil {
 		t.Fatal(err)
 	}
-	if len(page.Records) != 1 || !page.HasMore || page.NextCursor == nil || *page.NextCursor != "next-page" {
+	if len(page.Records) != 1 || !page.HasMore || page.NextCursor == nil || *page.NextCursor != "next-page" || page.RequestID != "request-list-json" {
 		t.Fatalf("unexpected page output: %#v", page)
 	}
 	if len(page.Notices) != 1 || page.Notices[0].Code != "NEXT_PAGE" {
@@ -590,6 +611,7 @@ func TestRecordListJSONPreservesPagination(t *testing.T) {
 func TestRecordListHumanOutputTeachesNextPage(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		writer.Header().Set("Content-Type", "application/json")
+		writer.Header().Set("X-Request-ID", "request-list-human")
 		_, _ = writer.Write([]byte(`{"records":[{"record_id":"014b2680-df5b-4c8d-97ef-abde0a9746d6","consumed_at":"2026-08-07T16:00:00+08:00","consumed_time_zone_offset_minutes":480,"nutrients":{"energy":"520","protein":"28.5","carbohydrate":"62","fat":"18"},"source":"CLI","note":"Pengnian lunch","version":1,"created_at":"2026-08-07T08:00:00Z","updated_at":"2026-08-07T08:00:00Z","deleted_at":null}],"next_cursor":"next-page","has_more":true}`))
 	}))
 	defer server.Close()
@@ -609,6 +631,7 @@ func TestRecordListHumanOutputTeachesNextPage(t *testing.T) {
 	}
 	for _, required := range []string{
 		"records: 1",
+		"request_id: request-list-human",
 		"record_id: 014b2680-df5b-4c8d-97ef-abde0a9746d6",
 		"energy_kcal: 520",
 		"note: \"Pengnian lunch\"",

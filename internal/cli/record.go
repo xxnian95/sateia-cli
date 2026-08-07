@@ -65,7 +65,8 @@ Results are ordered by consumed_at descending, then record_id descending.
 The CLI does not paginate automatically. For the next page, repeat the command
 with the same filters and pass the returned next_cursor as --cursor. A cursor is
 opaque and is valid only with the same consumed-time bounds, deletion filter,
-and limit. Omit --cursor for the first page.`,
+and limit. Omit --cursor for the first page. JSON output includes top-level
+request_id for correlation with server logs and audit events.`,
 		Example: `  sateia record list \
     --consumed-from 2026-08-01T00:00:00+08:00 \
     --consumed-before 2026-08-08T00:00:00+08:00 \
@@ -102,7 +103,7 @@ and limit. Omit --cursor for the first page.`,
 			if err != nil {
 				return err
 			}
-			page, err := client.ListNutritionRecords(command.Context(), api.ListNutritionRecordsOptions{
+			page, metadata, err := client.ListNutritionRecords(command.Context(), api.ListNutritionRecordsOptions{
 				ConsumedFrom: from, ConsumedBefore: before, IncludeDeleted: options.includeDeleted,
 				Cursor: options.cursor, Limit: options.limit,
 			})
@@ -110,15 +111,21 @@ and limit. Omit --cursor for the first page.`,
 				return fmt.Errorf("list nutrition records: %w", err)
 			}
 			if options.jsonOutput {
+				output := struct {
+					RequestID  string                `json:"request_id"`
+					Records    []api.NutritionRecord `json:"records"`
+					NextCursor *string               `json:"next_cursor"`
+					HasMore    bool                  `json:"has_more"`
+				}{RequestID: metadata.RequestID, Records: page.Records, NextCursor: page.NextCursor, HasMore: page.HasMore}
 				if page.HasMore && page.NextCursor != nil {
-					return app.writeJSONWithNotices(command.Context(), page, notice{
+					return app.writeJSONWithNotices(command.Context(), output, notice{
 						Code:    "NEXT_PAGE",
 						Message: "More records are available. Repeat the command with the same filters and pass next_cursor as --cursor.",
 					})
 				}
-				return app.writeJSON(command.Context(), page)
+				return app.writeJSON(command.Context(), output)
 			}
-			printNutritionRecordPage(app.out, page)
+			printNutritionRecordPage(app.out, page, metadata.RequestID)
 			app.writeHumanNotices(command.Context())
 			return nil
 		},
@@ -129,15 +136,19 @@ and limit. Omit --cursor for the first page.`,
 	flags.IntVar(&options.limit, "limit", 0, "maximum records in this page, from 1 to 100 (required)")
 	flags.BoolVar(&options.includeDeleted, "include-deleted", false, "include soft-deleted records")
 	flags.StringVar(&options.cursor, "cursor", "", "opaque next_cursor from the previous page, with the same filters")
-	flags.BoolVar(&options.jsonOutput, "json", false, "print records and pagination metadata as JSON")
+	flags.BoolVar(&options.jsonOutput, "json", false, "print request ID, records, and pagination metadata as JSON")
 	for _, name := range []string{"consumed-from", "consumed-before", "limit"} {
 		_ = command.MarkFlagRequired(name)
 	}
 	return command
 }
 
-func printNutritionRecordPage(output io.Writer, page api.NutritionRecordPage) {
-	fmt.Fprintf(output, "Nutrition records.\nrecords: %d\n", len(page.Records))
+func printNutritionRecordPage(output io.Writer, page api.NutritionRecordPage, requestID string) {
+	fmt.Fprintln(output, "Nutrition records.")
+	if requestID != "" {
+		fmt.Fprintf(output, "request_id: %s\n", requestID)
+	}
+	fmt.Fprintf(output, "records: %d\n", len(page.Records))
 	for index, record := range page.Records {
 		fmt.Fprintf(output, "\n[%d]\nrecord_id: %s\nconsumed_at: %s\nconsumed_time_zone_offset_minutes: %d\n", index+1, record.RecordID, record.ConsumedAt.Format(time.RFC3339Nano), record.ConsumedTimeZoneOffsetMinutes)
 		fmt.Fprintf(output, "energy_kcal: %s\nprotein_g: %s\ncarbohydrate_g: %s\nfat_g: %s\n", record.Nutrients["energy"], record.Nutrients["protein"], record.Nutrients["carbohydrate"], record.Nutrients["fat"])
@@ -178,7 +189,9 @@ explicit UTC offset and defaults to now.
 
 The CLI generates record_id and mutation_id. After an ambiguous network
 failure, retry the exact same payload with both identifiers printed in the
-error. Using new identifiers may create a duplicate record.`,
+error. Using new identifiers may create a duplicate record. JSON output
+includes top-level request_id for correlation with server logs and audit
+events.`,
 		Example: `  sateia record create \
     --energy 520 \
     --protein 28.5 \
@@ -208,15 +221,16 @@ error. Using new identifiers may create a duplicate record.`,
 			if err != nil {
 				return err
 			}
-			record, err := client.CreateNutritionRecord(command.Context(), request)
+			record, metadata, err := client.CreateNutritionRecord(command.Context(), request)
 			if err != nil {
 				return createErrorWithGuidance(err, request)
 			}
 			if options.jsonOutput {
 				output := struct {
 					MutationID string              `json:"mutation_id"`
+					RequestID  string              `json:"request_id"`
 					Record     api.NutritionRecord `json:"record"`
-				}{MutationID: request.MutationID, Record: record}
+				}{MutationID: request.MutationID, RequestID: metadata.RequestID, Record: record}
 				return app.writeJSON(command.Context(), output)
 			}
 			fmt.Fprintf(app.out, `Nutrition record created.
@@ -225,8 +239,11 @@ mutation_id: %s
 version: %d
 source: %s
 consumed_at: %s
-For machine-readable output, add --json.
 `, record.RecordID, request.MutationID, record.Version, record.Source, record.ConsumedAt.Format(time.RFC3339))
+			if metadata.RequestID != "" {
+				fmt.Fprintf(app.out, "request_id: %s\n", metadata.RequestID)
+			}
+			fmt.Fprintln(app.out, "For machine-readable output, add --json.")
 			app.writeHumanNotices(command.Context())
 			return nil
 		},
@@ -240,7 +257,7 @@ For machine-readable output, add --json.
 	flags.StringVar(&options.consumedAt, "consumed-at", "", "RFC 3339 timestamp with offset (default: now)")
 	flags.StringVar(&options.recordID, "record-id", "", "UUID to reuse when retrying a create")
 	flags.StringVar(&options.mutationID, "mutation-id", "", "UUID to reuse when retrying a create")
-	flags.BoolVar(&options.jsonOutput, "json", false, "print the created record as JSON")
+	flags.BoolVar(&options.jsonOutput, "json", false, "print the request ID and created record as JSON")
 	for _, name := range []string{"energy", "protein", "carbohydrate", "fat"} {
 		_ = command.MarkFlagRequired(name)
 	}

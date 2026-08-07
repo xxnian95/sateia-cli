@@ -128,7 +128,7 @@ the CLI creates it with private permissions before consuming the device code.`,
 			if err != nil {
 				return err
 			}
-			issued, err := client.ExchangePairingCode(command.Context(), deviceCode, deviceName)
+			issued, metadata, err := client.ExchangePairingCode(command.Context(), deviceCode, deviceName)
 			if err != nil {
 				return loginErrorWithGuidance(err)
 			}
@@ -159,7 +159,13 @@ token_expires_at: %s
 credential_source: %s
 `, baseURL, deviceName, issued.TokenID, issued.ExpiresAt.Format(time.RFC3339), credentialSource)
 			if prepared != nil {
-				fmt.Fprintf(app.out, "token_file: %s\nNext: set SATEIA_TOKEN_FILE=%q and run \"sateia auth status\".\n", prepared.Path(), prepared.Path())
+				fmt.Fprintf(app.out, "token_file: %s\n", prepared.Path())
+			}
+			if metadata.RequestID != "" {
+				fmt.Fprintf(app.out, "request_id: %s\n", metadata.RequestID)
+			}
+			if prepared != nil {
+				fmt.Fprintf(app.out, "Next: set SATEIA_TOKEN_FILE=%q and run \"sateia auth status\".\n", prepared.Path())
 			} else {
 				fmt.Fprintln(app.out, `Next: run "sateia auth status" to verify the stored credential.`)
 			}
@@ -202,12 +208,16 @@ write nutrition data.`,
 			if err != nil {
 				return err
 			}
-			if err := client.CheckAuthentication(command.Context()); err != nil {
+			metadata, err := client.CheckAuthentication(command.Context())
+			if err != nil {
 				return authenticationCheckError(err, source)
 			}
 			fmt.Fprintf(app.out, "Authentication verified.\nserver: %s\ncredential_source: %s\n", baseURL, source)
 			if source == "keyring" && stored.ExpiresAt != nil {
 				fmt.Fprintf(app.out, "token_expires_at: %s\n", stored.ExpiresAt.Format(time.RFC3339))
+			}
+			if metadata.RequestID != "" {
+				fmt.Fprintf(app.out, "request_id: %s\n", metadata.RequestID)
 			}
 			fmt.Fprintln(app.out, `Next: run "sateia record create --help" before writing a record.`)
 			app.writeHumanNotices(command.Context())

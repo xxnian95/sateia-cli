@@ -141,6 +141,11 @@ used, and `UPDATE_AVAILABLE` supplies the exact `go install` command for a
 newer stable tag. Treat notices as guidance; command success is still
 determined by the process exit status.
 
+Server-backed JSON responses also include top-level `request_id`, copied from
+the server's `X-Request-ID` response header. Human-readable success output and
+API errors show the same value when available. Use it to correlate server logs
+and audit events; it is request metadata, not a nutrition record identifier.
+
 After a successful command completes, the CLI checks the public GitHub tag list
 for a newer stable version. The result is cached for 24 hours so normal commands
 do not wait on GitHub every time. Network or cache failures never change the

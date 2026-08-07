@@ -162,6 +162,9 @@ success response.
 
 - Include the server URL, credential source, record identifiers, and server error
   code when useful.
+- Preserve and report top-level `request_id` when diagnosing a server request.
+  It correlates the CLI response with server logs and audit events; it is not a
+  nutrition record identifier and must not be used for pagination or retries.
 - For queries, report the exact consumed-time window, whether deleted records
   were included, and whether more pages remain.
 - Never include the token secret or full environment dumps.

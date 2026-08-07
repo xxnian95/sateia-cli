@@ -58,6 +58,13 @@ Response notices and updates:
     for 24 hours. Failures never change the command result.
   - Set SATEIA_NO_UPDATE_NOTIFIER=1 to disable the tag check in hermetic runs.
 
+Request correlation:
+  - Successful server-backed commands expose the server's X-Request-ID as
+    top-level request_id in JSON and as request_id in human-readable output.
+  - API errors include request_id when the server supplied one. Report it when
+    diagnosing a failure so operators can correlate structured logs and audit
+    events. It identifies the request, not a nutrition record.
+
 Exit status is zero on success and non-zero on validation, authentication,
 network, or server errors.`
 
