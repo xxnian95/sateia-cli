@@ -185,6 +185,33 @@ make check
 make build
 ```
 
+## Releases
+
+Every pull request and push to `master` runs the Linux, macOS, and Windows CI
+matrix. After a `master` push passes CI, Release Please creates or updates a
+release pull request from Conventional Commit history. Merging that release
+pull request produces another `master` CI run; only after it passes does Release
+Please create the immutable `vMAJOR.MINOR.PATCH` tag and matching GitHub
+Release.
+
+Commit prefixes determine the next version:
+
+- `fix:` produces a patch release.
+- `feat:` produces a minor release.
+- A Conventional Commit with `!` or a `BREAKING CHANGE:` footer produces a
+  major release.
+- `docs:`, `test:`, and `chore:` do not produce a release by themselves.
+
+Do not move or overwrite a released version tag. Publish a follow-up fix under
+the next patch version instead.
+
+Repository administrators must enable **Settings > Actions > General > Allow
+GitHub Actions to create and approve pull requests** so the built-in
+`GITHUB_TOKEN` can maintain the release pull request. If release pull requests
+later require their own CI checks before merge, configure a GitHub App or
+fine-grained token instead; events created by the built-in token do not start
+additional workflows.
+
 The CLI follows the contract in the Sateia API OpenAPI document. Contract JSON
 fields remain English `lower_snake_case`, and enum values remain English
 `UPPER_SNAKE_CASE`.
