@@ -49,6 +49,15 @@ Safe agent workflow:
      both the printed --record-id and --mutation-id. Never generate new IDs
      for that retry.
 
+Response notices and updates:
+  - JSON responses include a top-level _notice list. Inspect each code and
+    finish the requested operation before acting on informational notices.
+  - UPDATE_AVAILABLE includes the exact go install command for the latest
+    stable GitHub tag. NEXT_PAGE explains when pagination should continue.
+  - The public GitHub tag check runs after a successful command and is cached
+    for 24 hours. Failures never change the command result.
+  - Set SATEIA_NO_UPDATE_NOTIFIER=1 to disable the tag check in hermetic runs.
+
 Exit status is zero on success and non-zero on validation, authentication,
 network, or server errors.`
 
@@ -58,8 +67,9 @@ func (app *application) newEnvironmentCommand() *cobra.Command {
 		Short: "Explain configuration and safe automation",
 		Long:  environmentGuide,
 		Args:  cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error {
+		RunE: func(command *cobra.Command, _ []string) error {
 			fmt.Fprintln(app.out, environmentGuide)
+			app.writeHumanNotices(command.Context())
 			return nil
 		},
 	}

@@ -163,6 +163,7 @@ credential_source: %s
 			} else {
 				fmt.Fprintln(app.out, `Next: run "sateia auth status" to verify the stored credential.`)
 			}
+			app.writeHumanNotices(command.Context())
 			return nil
 		},
 	}
@@ -209,6 +210,7 @@ write nutrition data.`,
 				fmt.Fprintf(app.out, "token_expires_at: %s\n", stored.ExpiresAt.Format(time.RFC3339))
 			}
 			fmt.Fprintln(app.out, `Next: run "sateia record create --help" before writing a record.`)
+			app.writeHumanNotices(command.Context())
 			return nil
 		},
 	}
@@ -224,7 +226,7 @@ This does not revoke the token on the server. Revoke the CLI token in the
 Sateia app when the credential must become invalid everywhere. Environment and
 token-file credentials are managed by their owner and are not deleted.`,
 		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error {
+		RunE: func(command *cobra.Command, _ []string) error {
 			if strings.TrimSpace(os.Getenv("SATEIA_TOKEN")) != "" {
 				return errors.New("SATEIA_TOKEN is set in the environment; unset it to log out")
 			}
@@ -250,6 +252,7 @@ token-file credentials are managed by their owner and are not deleted.`,
 server: %s
 To invalidate the token on the server, revoke it in Sateia app > Settings > CLI Access.
 `, baseURL)
+			app.writeHumanNotices(command.Context())
 			return nil
 		},
 	}

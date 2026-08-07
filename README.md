@@ -132,6 +132,21 @@ ambiguous network failure, the error prints both identifiers. Repeat the exact
 request with `--record-id` and `--mutation-id` to get the server's idempotent
 result without creating a second record.
 
+## Response notices and updates
+
+Machine-readable responses include a top-level `_notice` array. Each item has
+an English `UPPER_SNAKE_CASE` `code`, a `message`, and, when useful, a
+`command`. For example, `NEXT_PAGE` explains that the returned cursor should be
+used, and `UPDATE_AVAILABLE` supplies the exact `go install` command for a
+newer stable tag. Treat notices as guidance; command success is still
+determined by the process exit status.
+
+After a successful command completes, the CLI checks the public GitHub tag list
+for a newer stable version. The result is cached for 24 hours so normal commands
+do not wait on GitHub every time. Network or cache failures never change the
+business command's result. Set `SATEIA_NO_UPDATE_NOTIFIER=1` when a hermetic
+environment must skip this check.
+
 ## Configuration
 
 The server is selected in this order:
@@ -143,7 +158,8 @@ The server is selected in this order:
 
 Remote servers must use HTTPS. Plain HTTP is accepted only for loopback local
 development. `SATEIA_CONFIG_DIR` can relocate the non-secret configuration
-directory for isolated environments and tests.
+directory for isolated environments and tests. It also contains the non-secret
+`update-check.json` cache.
 
 Run `sateia --help` or `sateia <command> --help` for the complete command
 reference. Run `sateia environment` for credential precedence, storage, and a

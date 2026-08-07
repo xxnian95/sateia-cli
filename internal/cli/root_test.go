@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -12,7 +13,16 @@ import (
 	"testing"
 
 	"github.com/xxnian95/sateia-cli/internal/credential"
+	"github.com/xxnian95/sateia-cli/internal/updatecheck"
 )
+
+type stubUpdateChecker struct {
+	check func(context.Context, string) (*updatecheck.Available, error)
+}
+
+func (checker stubUpdateChecker) Check(ctx context.Context, version string) (*updatecheck.Available, error) {
+	return checker.check(ctx, version)
+}
 
 func TestRecordCreateEndToEndWithEnvironmentToken(t *testing.T) {
 	var received struct {
@@ -85,6 +95,7 @@ func TestHelpTeachesCompleteAgentWorkflow(t *testing.T) {
 				"Settings > CLI Access",
 				"For headless automation, set SATEIA_TOKEN",
 				"SATEIA_TOKEN_FILE",
+				"_notice list",
 				"sateia environment",
 			},
 		},
@@ -159,6 +170,8 @@ func TestEnvironmentCommandTeachesCredentialSafetyAndRetry(t *testing.T) {
 		"never the token secret",
 		"removes only a keyring credential",
 		"both the printed --record-id and --mutation-id",
+		"top-level _notice list",
+		"SATEIA_NO_UPDATE_NOTIFIER",
 	} {
 		if !strings.Contains(output.String(), required) {
 			t.Errorf("environment output does not contain %q", required)
@@ -392,6 +405,84 @@ func TestRecordCreateJSONIncludesMutationIdentifier(t *testing.T) {
 	}
 }
 
+func TestJSONResponseIncludesUpdateInNoticeListAfterCommand(t *testing.T) {
+	order := make([]string, 0, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		order = append(order, "command")
+		writer.Header().Set("Content-Type", "application/json")
+		writer.WriteHeader(http.StatusCreated)
+		_, _ = writer.Write([]byte(`{"record":{"record_id":"014b2680-df5b-4c8d-97ef-abde0a9746d6","consumed_at":"2026-08-07T16:00:00+08:00","consumed_time_zone_offset_minutes":480,"nutrients":{"energy":"520","protein":"28.5","carbohydrate":"62","fat":"18"},"source":"CLI","note":null,"version":1,"created_at":"2026-08-07T08:00:00Z","updated_at":"2026-08-07T08:00:00Z","deleted_at":null}}`))
+	}))
+	defer server.Close()
+
+	t.Setenv("SATEIA_CONFIG_DIR", t.TempDir())
+	t.Setenv("SATEIA_TOKEN", "environment-secret")
+	checker := stubUpdateChecker{check: func(_ context.Context, version string) (*updatecheck.Available, error) {
+		order = append(order, "check")
+		return &updatecheck.Available{CurrentVersion: version, LatestVersion: "v1.1.0"}, nil
+	}}
+	var output bytes.Buffer
+	command := newWithDependencies("v1.0.0", strings.NewReader(""), &output, &output, credential.KeyringStore{}, checker)
+	command.SetArgs([]string{
+		"--server", server.URL, "record", "create",
+		"--energy", "520", "--protein", "28.5", "--carbohydrate", "62", "--fat", "18",
+		"--consumed-at", "2026-08-07T16:00:00+08:00",
+		"--record-id", "014b2680-df5b-4c8d-97ef-abde0a9746d6",
+		"--mutation-id", "3fe5867d-f8cb-48d4-90b2-529a15531db8", "--json",
+	})
+	if err := command.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(order, ","); got != "command,check" {
+		t.Fatalf("update check order = %q", got)
+	}
+	var decoded struct {
+		Notices []struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+			Command string `json:"command"`
+		} `json:"_notice"`
+	}
+	if err := json.Unmarshal(output.Bytes(), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if len(decoded.Notices) != 1 || decoded.Notices[0].Code != "UPDATE_AVAILABLE" {
+		t.Fatalf("unexpected notices: %#v", decoded.Notices)
+	}
+	if decoded.Notices[0].Command != "go install github.com/xxnian95/sateia-cli/cmd/sateia@v1.1.0" {
+		t.Fatalf("unexpected update command: %#v", decoded.Notices[0])
+	}
+}
+
+func TestJSONResponseAlwaysIncludesNoticeList(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write([]byte(`{"records":[],"next_cursor":null,"has_more":false}`))
+	}))
+	defer server.Close()
+
+	t.Setenv("SATEIA_CONFIG_DIR", t.TempDir())
+	t.Setenv("SATEIA_TOKEN", "environment-secret")
+	var output bytes.Buffer
+	command := New("test", strings.NewReader(""), &output, &output)
+	command.SetArgs([]string{
+		"--server", server.URL, "record", "list",
+		"--consumed-from", "2026-08-01T00:00:00+08:00",
+		"--consumed-before", "2026-08-08T00:00:00+08:00",
+		"--limit", "25", "--json",
+	})
+	if err := command.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	var decoded map[string]json.RawMessage
+	if err := json.Unmarshal(output.Bytes(), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if string(decoded["_notice"]) != "[]" {
+		t.Fatalf("unexpected _notice: %s", decoded["_notice"])
+	}
+}
+
 func TestRecordCreateFailurePrintsIdempotentRetryCommand(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		writer.Header().Set("Content-Type", "application/json")
@@ -481,12 +572,18 @@ func TestRecordListJSONPreservesPagination(t *testing.T) {
 		Records    []json.RawMessage `json:"records"`
 		NextCursor *string           `json:"next_cursor"`
 		HasMore    bool              `json:"has_more"`
+		Notices    []struct {
+			Code string `json:"code"`
+		} `json:"_notice"`
 	}
 	if err := json.Unmarshal(output.Bytes(), &page); err != nil {
 		t.Fatal(err)
 	}
 	if len(page.Records) != 1 || !page.HasMore || page.NextCursor == nil || *page.NextCursor != "next-page" {
 		t.Fatalf("unexpected page output: %#v", page)
+	}
+	if len(page.Notices) != 1 || page.Notices[0].Code != "NEXT_PAGE" {
+		t.Fatalf("unexpected page notices: %#v", page.Notices)
 	}
 }
 

@@ -175,5 +175,12 @@ success response.
   keyring source without printing the secret.
 - For queries, inspect `has_more` and `next_cursor` until the requested scope is
   complete.
+- Inspect the top-level `_notice` list after a successful JSON command.
+  `NEXT_PAGE` describes pagination, while `UPDATE_AVAILABLE` contains an exact
+  update command. Finish the user's current operation before acting on an
+  informational notice. Report the update briefly; do not install it unless the
+  user asked for an update.
+- Set `SATEIA_NO_UPDATE_NOTIFIER=1` only when a hermetic run must avoid the
+  cached public GitHub tag check.
 - For writes, report the returned `record_id`, `mutation_id`, version, and
   consumed time.

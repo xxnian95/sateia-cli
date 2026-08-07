@@ -2,7 +2,6 @@ package cli
 
 import (
 	"crypto/rand"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -111,11 +110,16 @@ and limit. Omit --cursor for the first page.`,
 				return fmt.Errorf("list nutrition records: %w", err)
 			}
 			if options.jsonOutput {
-				encoder := json.NewEncoder(app.out)
-				encoder.SetIndent("", "  ")
-				return encoder.Encode(page)
+				if page.HasMore && page.NextCursor != nil {
+					return app.writeJSONWithNotices(command.Context(), page, notice{
+						Code:    "NEXT_PAGE",
+						Message: "More records are available. Repeat the command with the same filters and pass next_cursor as --cursor.",
+					})
+				}
+				return app.writeJSON(command.Context(), page)
 			}
 			printNutritionRecordPage(app.out, page)
+			app.writeHumanNotices(command.Context())
 			return nil
 		},
 	}
@@ -213,9 +217,7 @@ error. Using new identifiers may create a duplicate record.`,
 					MutationID string              `json:"mutation_id"`
 					Record     api.NutritionRecord `json:"record"`
 				}{MutationID: request.MutationID, Record: record}
-				encoder := json.NewEncoder(app.out)
-				encoder.SetIndent("", "  ")
-				return encoder.Encode(output)
+				return app.writeJSON(command.Context(), output)
 			}
 			fmt.Fprintf(app.out, `Nutrition record created.
 record_id: %s
@@ -225,6 +227,7 @@ source: %s
 consumed_at: %s
 For machine-readable output, add --json.
 `, record.RecordID, request.MutationID, record.Version, record.Source, record.ConsumedAt.Format(time.RFC3339))
+			app.writeHumanNotices(command.Context())
 			return nil
 		},
 	}

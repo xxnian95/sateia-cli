@@ -10,6 +10,7 @@ import (
 	"github.com/xxnian95/sateia-cli/internal/api"
 	"github.com/xxnian95/sateia-cli/internal/config"
 	"github.com/xxnian95/sateia-cli/internal/credential"
+	"github.com/xxnian95/sateia-cli/internal/updatecheck"
 )
 
 const defaultServer = "https://xxnian.site/sateia-server"
@@ -27,28 +28,35 @@ Quick start:
 For headless automation, set SATEIA_TOKEN or SATEIA_TOKEN_FILE. Device-code
 login can create a private token file with --token-file when Linux Secret
 Service is unavailable. Run "sateia environment" for credential precedence
-and agent guidance.`
+and agent guidance. JSON responses include an additive _notice list for next
+steps and available CLI updates.`
 
 type application struct {
-	version string
-	in      io.Reader
-	out     io.Writer
-	errOut  io.Writer
-	server  string
-	store   credential.Store
+	version       string
+	in            io.Reader
+	out           io.Writer
+	errOut        io.Writer
+	server        string
+	store         credential.Store
+	updateChecker updateChecker
 }
 
 func New(version string, in io.Reader, out, errOut io.Writer) *cobra.Command {
-	return newWithStore(version, in, out, errOut, credential.KeyringStore{})
+	return newWithDependencies(version, in, out, errOut, credential.KeyringStore{}, updatecheck.New())
 }
 
 func newWithStore(version string, in io.Reader, out, errOut io.Writer, store credential.Store) *cobra.Command {
+	return newWithDependencies(version, in, out, errOut, store, updatecheck.New())
+}
+
+func newWithDependencies(version string, in io.Reader, out, errOut io.Writer, store credential.Store, checker updateChecker) *cobra.Command {
 	app := &application{
-		version: version,
-		in:      in,
-		out:     out,
-		errOut:  errOut,
-		store:   store,
+		version:       version,
+		in:            in,
+		out:           out,
+		errOut:        errOut,
+		store:         store,
+		updateChecker: checker,
 	}
 	root := &cobra.Command{
 		Use:   "sateia",
