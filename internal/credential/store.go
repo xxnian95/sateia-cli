@@ -2,13 +2,17 @@ package credential
 
 import (
 	"errors"
+	"fmt"
 
 	keyring "github.com/zalando/go-keyring"
 )
 
 const service = "sateia-cli"
 
-var ErrNotFound = errors.New("credential not found")
+var (
+	ErrNotFound    = errors.New("credential not found")
+	ErrUnavailable = errors.New("system credential store is unavailable")
+)
 
 type Store interface {
 	Get(account string) (string, error)
@@ -20,20 +24,23 @@ type KeyringStore struct{}
 
 func (KeyringStore) Get(account string) (string, error) {
 	value, err := keyring.Get(service, account)
-	if errors.Is(err, keyring.ErrNotFound) {
-		return "", ErrNotFound
-	}
-	return value, err
+	return value, normalizeKeyringError(err)
 }
 
 func (KeyringStore) Set(account, token string) error {
-	return keyring.Set(service, account, token)
+	return normalizeKeyringError(keyring.Set(service, account, token))
 }
 
 func (KeyringStore) Delete(account string) error {
-	err := keyring.Delete(service, account)
+	return normalizeKeyringError(keyring.Delete(service, account))
+}
+
+func normalizeKeyringError(err error) error {
+	if err == nil {
+		return nil
+	}
 	if errors.Is(err, keyring.ErrNotFound) {
 		return ErrNotFound
 	}
-	return err
+	return fmt.Errorf("%w: %v", ErrUnavailable, err)
 }

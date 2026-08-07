@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"fmt"
 	"io"
 	"os"
 	"strings"
@@ -13,17 +14,20 @@ import (
 
 const defaultServer = "https://xxnian.site/sateia-server"
 
-const rootDescription = `Sateia writes server-side nutrition records that can be synchronized to the
-Sateia app.
+const rootDescription = `Sateia queries and writes server-side nutrition records that can be synchronized
+to the Sateia app.
 
 Quick start:
-  1. In the Sateia app, open Settings > CLI Access and create a code.
-  2. Run "sateia auth login" and enter the same device name and code.
-  3. Run "sateia auth status" to verify the credential.
-  4. Run "sateia record create --help" before the first write.
+  1. In Sateia app > Settings > CLI Access, create a one-time code.
+  2. Identify this machine with hostname and choose a stable device name.
+  3. Run "sateia auth login" with the chosen device name and code.
+  4. Run "sateia auth status" to verify the credential.
+  5. Run "sateia record list --help" or "sateia record create --help".
 
-For headless automation, set SATEIA_TOKEN instead of running interactive login.
-Run "sateia environment" for credential storage, precedence, and agent guidance.`
+For headless automation, set SATEIA_TOKEN or SATEIA_TOKEN_FILE. Device-code
+login can create a private token file with --token-file when Linux Secret
+Service is unavailable. Run "sateia environment" for credential precedence
+and agent guidance.`
 
 type application struct {
 	version string
@@ -35,22 +39,27 @@ type application struct {
 }
 
 func New(version string, in io.Reader, out, errOut io.Writer) *cobra.Command {
+	return newWithStore(version, in, out, errOut, credential.KeyringStore{})
+}
+
+func newWithStore(version string, in io.Reader, out, errOut io.Writer, store credential.Store) *cobra.Command {
 	app := &application{
 		version: version,
 		in:      in,
 		out:     out,
 		errOut:  errOut,
-		store:   credential.KeyringStore{},
+		store:   store,
 	}
 	root := &cobra.Command{
 		Use:   "sateia",
-		Short: "Write nutrition records to Sateia",
+		Short: "Query and write nutrition records with Sateia",
 		Long:  rootDescription,
 		Example: `  # Interactive authentication
   sateia auth login
   sateia auth status
 
-  # Inspect the write contract
+  # Inspect the read and write contracts
+  sateia record list --help
   sateia record create --help`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
@@ -86,6 +95,13 @@ func (app *application) baseURL() (string, config.Config, error) {
 func (app *application) token(baseURL string) (string, string, error) {
 	if value := strings.TrimSpace(os.Getenv("SATEIA_TOKEN")); value != "" {
 		return value, "environment", nil
+	}
+	if path := strings.TrimSpace(os.Getenv("SATEIA_TOKEN_FILE")); path != "" {
+		value, err := credential.ReadTokenFile(path)
+		if err != nil {
+			return "", "", fmt.Errorf("read SATEIA_TOKEN_FILE: %w", err)
+		}
+		return value, "token_file", nil
 	}
 	value, err := app.store.Get(baseURL)
 	if err != nil {

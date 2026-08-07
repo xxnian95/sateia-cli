@@ -94,10 +94,10 @@ and limit. Omit --cursor for the first page.`,
 			}
 			token, _, err := app.token(baseURL)
 			if errors.Is(err, credential.ErrNotFound) {
-				return errors.New("not logged in; run 'sateia auth login' or set SATEIA_TOKEN")
+				return errors.New("not logged in; run 'sateia auth login' or set SATEIA_TOKEN or SATEIA_TOKEN_FILE")
 			}
 			if err != nil {
-				return fmt.Errorf("read token from system credential store: %w", err)
+				return fmt.Errorf("read authentication token: %w", err)
 			}
 			client, err := api.NewClient(baseURL, token, app.version, nil)
 			if err != nil {
@@ -195,10 +195,10 @@ error. Using new identifiers may create a duplicate record.`,
 			}
 			token, _, err := app.token(baseURL)
 			if errors.Is(err, credential.ErrNotFound) {
-				return errors.New("not logged in; run 'sateia auth login' or set SATEIA_TOKEN")
+				return errors.New("not logged in; run 'sateia auth login' or set SATEIA_TOKEN or SATEIA_TOKEN_FILE")
 			}
 			if err != nil {
-				return fmt.Errorf("read token from system credential store: %w", err)
+				return fmt.Errorf("read authentication token: %w", err)
 			}
 			client, err := api.NewClient(baseURL, token, app.version, nil)
 			if err != nil {

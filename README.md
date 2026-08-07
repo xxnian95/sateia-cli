@@ -3,7 +3,8 @@
 `sateia` is the public command-line client for querying and writing nutrition
 records on a Sateia server. It exchanges a short-lived code displayed by the
 Sateia app for an independently revocable CLI token, stores that token in the
-operating system credential store, and uses it as a Bearer token for requests.
+operating system credential store or an explicitly selected private file, and
+uses it as a Bearer token for requests.
 
 ## Install from source
 
@@ -15,9 +16,13 @@ go install github.com/xxnian95/sateia-cli/cmd/sateia@latest
 
 ## Log in
 
-In the Sateia app, open **Settings > CLI Access**, enter a name for this CLI
-installation, and create a code. Then run the command below and enter the same
-device name when prompted:
+In the Sateia app, open **Settings > CLI Access** and create a code. Before
+exchanging it, identify the current machine with `hostname`. Choose a stable,
+recognizable device name such as `agent-host-01 (Sateia CLI)`; do not reuse a
+generic name across devices. Then run the command below and enter the chosen
+device name when prompted. The CLI supplies this name during exchange as token
+metadata; it does not need to match a legacy label shown while creating the
+code:
 
 ```sh
 sateia auth login
@@ -33,6 +38,9 @@ For a non-interactive terminal, pass the one-time code and installation name:
 sateia auth login --device-code ABCD-EFGH --device-name "Pengnian Mac"
 ```
 
+An AI agent should run `hostname`, propose a name that identifies its current
+machine, and submit that name together with the user-provided code.
+
 Check or remove the current credential with:
 
 ```sh
@@ -40,12 +48,42 @@ sateia auth status
 sateia auth logout
 ```
 
-Logout removes the local credential. Revoke a CLI token from the Sateia app
-when the token must also become invalid on the server.
+Logout removes a local keyring credential. Environment and token-file secrets
+remain managed by their owner. Revoke a CLI token from the Sateia app when the
+token must also become invalid on the server.
 
-Automation can provide a token through `SATEIA_TOKEN`; the environment takes
-precedence over the credential store. Do not pass tokens as command-line flags,
-where they can be exposed through shell history or process inspection.
+Automation can provide a token through `SATEIA_TOKEN`. A headless Linux server,
+container, or agent can instead read a managed or mounted secret through
+`SATEIA_TOKEN_FILE`:
+
+```sh
+export SATEIA_TOKEN_FILE=/run/secrets/sateia-token
+sateia auth status
+```
+
+Credential precedence is `SATEIA_TOKEN`, `SATEIA_TOKEN_FILE`, then the system
+credential store. Do not pass token secrets as command-line arguments, where
+they can be exposed through shell history or process inspection.
+
+Linux device-code login normally requires a Secret Service provider. When a
+headless machine has none, reserve a new private token file before exchanging
+the code:
+
+```sh
+sateia auth login \
+  --device-code ABCD-EFGH \
+  --device-name "agent-host-01 (Sateia CLI)" \
+  --token-file "$HOME/.config/sateia/token"
+
+export SATEIA_TOKEN_FILE="$HOME/.config/sateia/token"
+sateia auth status
+```
+
+The parent directory must already exist. The CLI refuses to overwrite an
+existing path and creates the new file with mode `0600` before consuming the
+single-use code. `auth logout` does not delete environment-managed token files;
+remove them through their secret manager and revoke the server token when
+required.
 
 ## List records
 
