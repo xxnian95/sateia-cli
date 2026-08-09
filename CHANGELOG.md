@@ -6,6 +6,10 @@
 
 - Accept a one-off CLI token through the global `--token` flag, with precedence
   over environment, token-file, and keyring credentials.
+- Update nutrition records with optimistic version checks, complete nutrient
+  replacement, nullable-note handling, and idempotent retry guidance.
+- Soft-delete nutrition records with optimistic version checks and idempotent
+  tombstone responses.
 
 ### Changed
 

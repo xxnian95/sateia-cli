@@ -2,11 +2,9 @@
 
 [English](README.md) | 简体中文
 
-`sateia` 用于读取和创建 Sateia 服务端的营养记录。CLI 创建的记录会同步到
+`sateia` 用于读取和修改 Sateia 服务端的营养记录。CLI 修改的数据会同步到
 Sateia App。CLI 支持交互式登录、自动化场景的托管 token、单页查询、机器可读
-输出，以及创建记录失败后的幂等重试。
-
-当前 CLI 只支持查询和创建记录，不支持编辑或删除记录。
+输出、乐观并发控制，以及写操作失败后的幂等重试。
 
 ## 安装
 
@@ -43,6 +41,8 @@ sateia --version
    ```sh
    sateia record list --help
    sateia record create --help
+   sateia record update --help
+   sateia record delete --help
    ```
 
 一次性代码的有效期为五分钟，并且只能兑换一次。设备名称由 CLI 作为 token
@@ -143,6 +143,46 @@ CLI 会生成 `record_id` 和 `mutation_id`。如果创建请求遇到结果不�
 并传入输出的 `--record-id` 和 `--mutation-id`。复用 `mutation_id` 却修改请求内容
 会触发幂等冲突；生成新的标识符则可能创建重复记录。
 
+## 更新记录
+
+更新记录需要提供当前版本，并且只修改显式传入的字段：
+
+```sh
+sateia record update \
+  --record-id 014b2680-df5b-4c8d-97ef-abde0a9746d6 \
+  --expected-version 1 \
+  --energy 610 \
+  --protein 32 \
+  --carbohydrate 70 \
+  --fat 22 \
+  --note "修正后的午餐" \
+  --json
+```
+
+未传入的可变字段保持不变。营养值会作为一张完整的 map 替换，因此
+`--energy`、`--protein`、`--carbohydrate` 和 `--fat` 必须一起提供。
+`--consumed-at` 会同时更新摄入时间及其 UTC 偏移。使用 `--note ""` 保存空字符串，
+使用 `--clear-note` 保存 `null`。
+
+CLI 会生成 `mutation_id`。如果发生结果不确定的网络错误或临时服务端错误，必须
+使用错误信息中的 `--mutation-id`、`--record-id` 和 `--expected-version` 原样重试。
+只要修改任何字段，就必须使用新的 mutation ID。遇到 `VERSION_CONFLICT` 时，应先
+检查当前记录和版本，再发起新的更新；不要猜测版本号。
+
+## 删除记录
+
+删除操作会在服务端生成 tombstone，并要求提供当前版本：
+
+```sh
+sateia record delete \
+  --record-id 014b2680-df5b-4c8d-97ef-abde0a9746d6 \
+  --expected-version 2 \
+  --json
+```
+
+使用相同的 `mutation_id`、record ID 和 expected version 重试时，删除操作是幂等的。
+重放已经成功的删除会返回原 tombstone，不会再次增加版本。CLI 无法恢复已删除记录。
+
 ## 机器可读输出
 
 当其他程序或 AI agent 需要消费结果时，请使用 `--json`。成功的 JSON 响应包含
@@ -168,10 +208,11 @@ CLI 会在成功执行命令后检查更新，并缓存结果 24 小时。更新
    环境或 token 文件。
 4. 查询时使用明确的时间范围；翻页时保持所有过滤条件不变。
 5. 写入前运行 `sateia auth status`。
-6. 只有用户明确要求写入时才创建记录，不猜测缺失的营养值，也不把已知摄入
-   时间替换成当前时间。
+6. 只执行用户明确要求的创建、更新或删除操作，不猜测 record ID、expected
+   version、营养值或摄入时间。
 7. 优先使用 `--json`；只有在退出状态为零且成功响应可以解析时才报告成功。
-8. 对结果不确定的创建请求进行重试时，保留两个标识符和完全相同的请求内容。
+8. 对结果不确定的写请求进行重试时，保留 mutation ID 和完全相同的请求内容；
+   更新和删除还必须保留 record ID 与 expected version。
 
 仓库还提供了 Agent Skill：
 [`skills/use-sateia-cli/SKILL.md`](skills/use-sateia-cli/SKILL.md)。如果已安装 CLI
@@ -190,6 +231,12 @@ CLI 会在成功执行命令后检查更新，并缓存结果 24 小时。更新
   `--cursor` 从头开始。不要修改 cursor。
 - **创建结果不确定：**使用错误信息输出的 `--record-id` 和 `--mutation-id`，
   保持原请求内容不变后重试。
+- **更新或删除结果不确定：**使用错误信息输出的 `--record-id`、
+  `--expected-version` 和 `--mutation-id` 原样重试。
+- **`VERSION_CONFLICT`：**检查当前记录和版本，再使用新的 mutation ID 发起预期
+  操作；不要猜测版本号。
+- **`IDEMPOTENCY_CONFLICT`：**恢复该 mutation ID 对应的原始请求，不要用它提交
+  已修改的内容。
 - **服务端错误包含 `request_id`：**请求运维人员排查日志时附上该值。
 
 运行 `sateia environment` 可以查看完整的凭证、恢复、输出和 Agent 安全指南。

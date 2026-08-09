@@ -2,12 +2,10 @@
 
 English | [简体中文](README.zh-CN.md)
 
-`sateia` reads and creates nutrition records on a Sateia server. Records
-created by the CLI synchronize to the Sateia app. The CLI supports interactive
+`sateia` reads and mutates nutrition records on a Sateia server. Records
+changed by the CLI synchronize to the Sateia app. The CLI supports interactive
 login, managed tokens for automation, one-page queries, machine-readable
-output, and idempotent create retries.
-
-The CLI currently lists and creates records. It does not edit or delete them.
+output, optimistic concurrency, and idempotent mutation retries.
 
 ## Install
 
@@ -45,6 +43,8 @@ retry it.
    ```sh
    sateia record list --help
    sateia record create --help
+   sateia record update --help
+   sateia record delete --help
    ```
 
 The one-time code is valid for five minutes and can be exchanged only once.
@@ -153,6 +153,50 @@ Retry the exact same payload with the printed `--record-id` and
 `--mutation-id`. Changing the payload while reusing `mutation_id` causes an
 idempotency conflict; generating new identifiers may create a duplicate.
 
+## Update a record
+
+Updating a record requires its current version and changes only the supplied
+mutable fields:
+
+```sh
+sateia record update \
+  --record-id 014b2680-df5b-4c8d-97ef-abde0a9746d6 \
+  --expected-version 1 \
+  --energy 610 \
+  --protein 32 \
+  --carbohydrate 70 \
+  --fat 22 \
+  --note "Corrected lunch" \
+  --json
+```
+
+Omitted mutable flags remain unchanged. Nutrients are replaced as one complete
+map, so `--energy`, `--protein`, `--carbohydrate`, and `--fat` must be supplied
+together. `--consumed-at` updates both the timestamp and its UTC offset. Use
+`--note ""` to store an empty string or `--clear-note` to store `null`.
+
+The CLI generates `mutation_id`. After an ambiguous network or temporary
+server failure, retry the exact same command with the reported `--mutation-id`,
+`--record-id`, and `--expected-version`. If any mutable field changes, use a new
+mutation ID. On `VERSION_CONFLICT`, review the current record and version before
+issuing a new update; never guess the version.
+
+## Delete a record
+
+Deletion creates a server-side tombstone and requires the current version:
+
+```sh
+sateia record delete \
+  --record-id 014b2680-df5b-4c8d-97ef-abde0a9746d6 \
+  --expected-version 2 \
+  --json
+```
+
+The deletion is idempotent when retried with the same generated `mutation_id`,
+record ID, and expected version. Replaying a successful deletion returns the
+original tombstone without another version increment. The CLI cannot restore a
+deleted record.
+
 ## Machine-readable output
 
 Use `--json` when another program or an AI agent consumes the result. Successful
@@ -181,12 +225,13 @@ Live help is the command contract. An agent should:
 4. Use explicit time bounds for reads and keep all filters unchanged across
    cursor pages.
 5. Run `sateia auth status` before a write.
-6. Create a record only after the user requests the write. Do not invent a
-   nutrient value or replace a known consumed time with the current time.
+6. Perform only the exact create, update, or delete requested by the user. Do
+   not invent a record ID, expected version, nutrient value, or consumed time.
 7. Prefer `--json` and require a zero exit status plus a decoded success
    response before reporting success.
-8. Preserve both identifiers and the exact payload when retrying an ambiguous
-   create request.
+8. Preserve the mutation ID and exact payload when retrying an ambiguous
+   write. Update and delete retries must also preserve record ID and expected
+   version.
 
 The repository also includes an agent skill at
 [`skills/use-sateia-cli/SKILL.md`](skills/use-sateia-cli/SKILL.md). Live help
@@ -205,6 +250,12 @@ takes precedence if an installed CLI version differs from the skill.
   omit `--cursor` and start again. Never modify a cursor.
 - **An ambiguous create failure:** retry the exact payload with the printed
   `--record-id` and `--mutation-id`.
+- **An ambiguous update or delete failure:** retry the unchanged request with
+  the printed `--record-id`, `--expected-version`, and `--mutation-id`.
+- **`VERSION_CONFLICT`:** review the current record and version, then issue the
+  intended mutation with a new mutation ID. Never guess a version.
+- **`IDEMPOTENCY_CONFLICT`:** recover the original request associated with the
+  mutation ID; do not reuse it with changed content.
 - **A server error includes `request_id`:** include that value when asking an
   operator to inspect logs.
 

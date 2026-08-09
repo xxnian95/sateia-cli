@@ -1,6 +1,6 @@
 ---
 name: use-sateia-cli
-description: Use the public Sateia CLI to authenticate, query nutrition records, and create server-side nutrition records safely. Use when a user or agent needs to install or discover the sateia command, identify the current machine for device-code authentication, supply a token with --token, SATEIA_TOKEN, or SATEIA_TOKEN_FILE, read or write energy and macronutrient data, interpret CLI output, paginate queries, or retry an ambiguous record write without duplication.
+description: Use the public Sateia CLI to authenticate, query, create, update, and delete server-side nutrition records safely. Use when a user or agent needs to install or discover the sateia command, identify the current machine for device-code authentication, supply a token with --token, SATEIA_TOKEN, or SATEIA_TOKEN_FILE, read or mutate energy and macronutrient data, interpret CLI output, paginate queries, or retry an ambiguous record write without duplication.
 ---
 
 # Use Sateia CLI
@@ -14,7 +14,8 @@ the record and mutation identifiers across ambiguous retries.
 
 - Authenticate an interactive machine, headless server, container, or agent.
 - Query nutrition records with explicit time bounds and cursor pagination.
-- Create a nutrition record after the user explicitly requests a write.
+- Create, update, or delete a nutrition record after the user explicitly
+  requests that exact write.
 - Diagnose credential-source, validation, or retry failures without exposing a
   token or duplicating a record.
 
@@ -123,6 +124,45 @@ Report the created `record_id`, `mutation_id`, version, and consumed time. Do no
 claim success from HTTP reachability alone; require a zero exit and a decoded
 success response.
 
+## Update a nutrition record
+
+1. Run `sateia record update --help` and identify the exact record and its
+   current version from a trusted read result.
+2. Change only fields requested by the user. If any nutrient changes, supply
+   all four nutrient flags because the complete nutrient map is replaced.
+3. Use `--note ""` only for an explicit empty string and `--clear-note` only
+   when the user intends to store null.
+4. Prefer `--json` and report the returned record version and mutation ID.
+
+```sh
+sateia record update \
+  --record-id 014b2680-df5b-4c8d-97ef-abde0a9746d6 \
+  --expected-version 1 \
+  --energy 610 \
+  --protein 32 \
+  --carbohydrate 70 \
+  --fat 22 \
+  --json
+```
+
+Never infer `record_id` or `expected_version`. A version conflict requires a
+fresh read and user intent review before submitting a new mutation.
+
+## Delete a nutrition record
+
+Run `sateia record delete --help`. Delete only the exact record the user named
+or unambiguously selected, and use its reviewed current version.
+
+```sh
+sateia record delete \
+  --record-id 014b2680-df5b-4c8d-97ef-abde0a9746d6 \
+  --expected-version 2 \
+  --json
+```
+
+Deletion is a soft delete, but the CLI cannot restore it. Require a zero exit
+and decoded tombstone before reporting success.
+
 ## Recover from failures
 
 - Validation error: correct the stated input and submit a new request. Never
@@ -136,10 +176,13 @@ success response.
   unrelated keyring credential.
 - Invalid pairing code: create a new code and use the exact matching device name.
 - Ambiguous network or retryable server failure after a record request: reuse
-  both identifiers printed by the CLI and repeat the exact same record payload.
-  Never generate new identifiers for that retry.
+  every identifier printed by the CLI and repeat the exact same payload.
+  Update and delete retries must preserve `record_id`, `expected_version`, and
+  `mutation_id`. Never generate a new mutation ID for that retry.
 - `IDEMPOTENCY_CONFLICT`: stop. The mutation identifier was reused with different
   input; recover the original request instead of guessing.
+- `VERSION_CONFLICT`: stop. Read and review the current record version before
+  issuing a new mutation with a new mutation ID. Never guess the version.
 
 ## Common Rationalizations
 
@@ -159,6 +202,8 @@ success response.
 - Device-code login on headless Linux without keyring access or `--token-file`.
 - Reusing an existing token-file path or changing filters with a pagination
   cursor.
+- Guessing a record ID or expected version, partially specifying a replacement
+  nutrient map, or reusing a mutation ID after changing a write payload.
 - Claiming success without a zero exit and a decoded success response.
 
 ## Log out or revoke
@@ -196,5 +241,5 @@ success response.
   user asked for an update.
 - Set `SATEIA_NO_UPDATE_NOTIFIER=1` only when a hermetic run must avoid the
   cached public GitHub tag check.
-- For writes, report the returned `record_id`, `mutation_id`, version, and
-  consumed time.
+- For writes, report the returned `record_id`, `mutation_id`, and version. Also
+  report consumed time for create and update, or deletion time for delete.
