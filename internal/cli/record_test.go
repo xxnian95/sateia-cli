@@ -1,8 +1,11 @@
 package cli
 
 import (
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/xxnian95/sateia-cli/internal/api"
 )
 
 func TestBuildCreateRequestDerivesOffsetAndGeneratesIdentifiers(t *testing.T) {
@@ -29,5 +32,39 @@ func TestBuildCreateRequestRejectsContractInvalidDecimal(t *testing.T) {
 	}, time.Now())
 	if err == nil {
 		t.Fatal("expected scientific notation to be rejected")
+	}
+}
+
+func TestListErrorWithGuidanceDistinguishesRecovery(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		err      error
+		required string
+	}{
+		{
+			name:     "invalid cursor",
+			err:      &api.APIError{StatusCode: 400, Code: "INVALID_CURSOR", Message: "The record cursor does not match the current filters"},
+			required: "start again without --cursor",
+		},
+		{
+			name:     "authentication",
+			err:      &api.APIError{StatusCode: 401, Code: "UNAUTHENTICATED", Message: "Invalid token"},
+			required: "sateia auth status",
+		},
+		{
+			name:     "rate limit",
+			err:      &api.APIError{StatusCode: 429, Code: "RATE_LIMIT_EXCEEDED", Message: "Too many requests", Retryable: true},
+			required: "retry the same read-only command",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			message := listErrorWithGuidance(test.err).Error()
+			if !strings.Contains(message, test.required) {
+				t.Fatalf("error does not contain %q: %s", test.required, message)
+			}
+		})
 	}
 }

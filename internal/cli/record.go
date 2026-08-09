@@ -11,7 +11,6 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/xxnian95/sateia-cli/internal/api"
-	"github.com/xxnian95/sateia-cli/internal/credential"
 )
 
 var decimalPattern = regexp.MustCompile(`^(0|[1-9][0-9]*)(\.[0-9]{1,6})?$`)
@@ -45,7 +44,8 @@ func (app *application) newRecordCommand() *cobra.Command {
 
 Use "sateia record list --help" for read-only queries. Record creation is a
 write operation; verify authentication and inspect "sateia record create
---help" before invoking it.`,
+--help" before invoking it. Use --json when another program or an AI agent will
+consume the result.`,
 	}
 	command.AddCommand(app.newRecordListCommand(), app.newRecordCreateCommand())
 	return command
@@ -76,14 +76,14 @@ request_id for correlation with server logs and audit events.`,
 		RunE: func(command *cobra.Command, _ []string) error {
 			from, err := time.Parse(time.RFC3339, options.consumedFrom)
 			if err != nil {
-				return fmt.Errorf("parse --consumed-from as RFC 3339: %w", err)
+				return fmt.Errorf("--consumed-from must be an RFC 3339 timestamp such as 2026-08-01T00:00:00+08:00: %w", err)
 			}
 			before, err := time.Parse(time.RFC3339, options.consumedBefore)
 			if err != nil {
-				return fmt.Errorf("parse --consumed-before as RFC 3339: %w", err)
+				return fmt.Errorf("--consumed-before must be an RFC 3339 timestamp such as 2026-08-08T00:00:00+08:00: %w", err)
 			}
 			if !from.Before(before) {
-				return errors.New("--consumed-from must be earlier than --consumed-before")
+				return errors.New("--consumed-from must be earlier than --consumed-before; the lower bound is inclusive and the upper bound is exclusive")
 			}
 			if options.limit < 1 || options.limit > 100 {
 				return errors.New("--limit must be between 1 and 100")
@@ -92,12 +92,9 @@ request_id for correlation with server logs and audit events.`,
 			if err != nil {
 				return err
 			}
-			token, _, err := app.token(baseURL)
-			if errors.Is(err, credential.ErrNotFound) {
-				return errors.New("not logged in; run 'sateia auth login' or set SATEIA_TOKEN or SATEIA_TOKEN_FILE")
-			}
+			token, source, err := app.token(baseURL)
 			if err != nil {
-				return fmt.Errorf("read authentication token: %w", err)
+				return authenticationTokenError(err, source)
 			}
 			client, err := api.NewClient(baseURL, token, app.version, nil)
 			if err != nil {
@@ -108,7 +105,7 @@ request_id for correlation with server logs and audit events.`,
 				Cursor: options.cursor, Limit: options.limit,
 			})
 			if err != nil {
-				return fmt.Errorf("list nutrition records: %w", err)
+				return listErrorWithGuidance(err)
 			}
 			if options.jsonOutput {
 				output := struct {
@@ -131,8 +128,8 @@ request_id for correlation with server logs and audit events.`,
 		},
 	}
 	flags := command.Flags()
-	flags.StringVar(&options.consumedFrom, "consumed-from", "", "inclusive RFC 3339 consumed-time lower bound (required)")
-	flags.StringVar(&options.consumedBefore, "consumed-before", "", "exclusive RFC 3339 consumed-time upper bound (required)")
+	flags.StringVar(&options.consumedFrom, "consumed-from", "", "inclusive RFC 3339 lower bound, for example 2026-08-01T00:00:00+08:00 (required)")
+	flags.StringVar(&options.consumedBefore, "consumed-before", "", "exclusive RFC 3339 upper bound, for example 2026-08-08T00:00:00+08:00 (required)")
 	flags.IntVar(&options.limit, "limit", 0, "maximum records in this page, from 1 to 100 (required)")
 	flags.BoolVar(&options.includeDeleted, "include-deleted", false, "include soft-deleted records")
 	flags.StringVar(&options.cursor, "cursor", "", "opaque next_cursor from the previous page, with the same filters")
@@ -141,6 +138,29 @@ request_id for correlation with server logs and audit events.`,
 		_ = command.MarkFlagRequired(name)
 	}
 	return command
+}
+
+func listErrorWithGuidance(err error) error {
+	wrapped := fmt.Errorf("list nutrition records failed: %w", err)
+	var apiErr *api.APIError
+	if !errors.As(err, &apiErr) {
+		return fmt.Errorf("%w\nNext: this operation is read-only; after restoring connectivity, retry the same command with unchanged filters", wrapped)
+	}
+	switch apiErr.Code {
+	case "UNAUTHENTICATED":
+		return fmt.Errorf("%w\nNext: run \"sateia auth status\" with the same credential source, repair that credential, then retry the same list command", wrapped)
+	case "INVALID_CURSOR":
+		// Cursors are bound to the complete filter set and must never be repaired heuristically.
+		return fmt.Errorf("%w\nNext: restore the exact filters that produced this cursor, or start again without --cursor; never edit or decode a cursor", wrapped)
+	case "VALIDATION_ERROR", "INVALID_PARAMETER", "MALFORMED_REQUEST":
+		return fmt.Errorf("%w\nNext: correct the reported flag or time window, then start the query again; do not reuse a cursor with changed filters", wrapped)
+	case "RATE_LIMIT_EXCEEDED":
+		return fmt.Errorf("%w\nNext: wait for the rate limit to clear, then retry the same read-only command", wrapped)
+	}
+	if apiErr.Retryable || apiErr.StatusCode >= 500 {
+		return fmt.Errorf("%w\nNext: the read did not change server data; retry the same command after the temporary failure clears", wrapped)
+	}
+	return fmt.Errorf("%w\nNext: inspect the server error and request_id, if present, before changing filters or retrying", wrapped)
 }
 
 func printNutritionRecordPage(output io.Writer, page api.NutritionRecordPage, requestID string) {
@@ -210,12 +230,9 @@ events.`,
 			if err != nil {
 				return err
 			}
-			token, _, err := app.token(baseURL)
-			if errors.Is(err, credential.ErrNotFound) {
-				return errors.New("not logged in; run 'sateia auth login' or set SATEIA_TOKEN or SATEIA_TOKEN_FILE")
-			}
+			token, source, err := app.token(baseURL)
 			if err != nil {
-				return fmt.Errorf("read authentication token: %w", err)
+				return authenticationTokenError(err, source)
 			}
 			client, err := api.NewClient(baseURL, token, app.version, nil)
 			if err != nil {
@@ -274,7 +291,7 @@ func createErrorWithGuidance(err error, request api.CreateRecordRequest) error {
 	}
 	switch apiErr.Code {
 	case "UNAUTHENTICATED":
-		return fmt.Errorf("%w\nNext: repair authentication with \"sateia auth status\", then %s", wrapped, exactRetry)
+		return fmt.Errorf("%w\nNext: verify and repair the same credential source with \"sateia auth status\", then %s", wrapped, exactRetry)
 	case "VALIDATION_ERROR", "INVALID_PARAMETER", "MALFORMED_REQUEST":
 		return fmt.Errorf("%w\nNext: correct the reported input and submit a new request; never reuse a mutation_id with a different payload", wrapped)
 	case "IDEMPOTENCY_CONFLICT":
@@ -307,7 +324,7 @@ func buildCreateRequest(options createOptions, now time.Time) (api.CreateRecordR
 	if options.consumedAt != "" {
 		consumedAt, err = time.Parse(time.RFC3339, options.consumedAt)
 		if err != nil {
-			return api.CreateRecordRequest{}, fmt.Errorf("parse --consumed-at as RFC 3339: %w", err)
+			return api.CreateRecordRequest{}, fmt.Errorf("--consumed-at must be an RFC 3339 timestamp with an explicit UTC offset, such as 2026-08-07T12:30:00+08:00: %w", err)
 		}
 	}
 	_, offsetSeconds := consumedAt.Zone()

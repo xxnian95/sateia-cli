@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/xxnian95/sateia-cli/internal/api"
 	"github.com/xxnian95/sateia-cli/internal/credential"
 	"github.com/xxnian95/sateia-cli/internal/updatecheck"
 )
@@ -95,7 +96,8 @@ func TestHelpTeachesCompleteAgentWorkflow(t *testing.T) {
 			required: []string{
 				"Quick start:",
 				"Settings > CLI Access",
-				"For headless automation, set SATEIA_TOKEN",
+				"If you already have a token, use --token",
+				"--token string",
 				"SATEIA_TOKEN_FILE",
 				"_notice list",
 				"sateia environment",
@@ -169,7 +171,7 @@ func TestEnvironmentCommandTeachesCredentialSafetyAndRetry(t *testing.T) {
 	}
 	normalizedOutput := strings.Join(strings.Fields(output.String()), " ")
 	for _, required := range []string{
-		"Precedence: SATEIA_TOKEN, SATEIA_TOKEN_FILE, then the system keyring",
+		"Precedence: --token, SATEIA_TOKEN, SATEIA_TOKEN_FILE, then the system keyring",
 		"SATEIA_TOKEN_FILE",
 		"current machine",
 		"never the token secret",
@@ -184,6 +186,15 @@ func TestEnvironmentCommandTeachesCredentialSafetyAndRetry(t *testing.T) {
 		if !strings.Contains(normalizedOutput, required) {
 			t.Errorf("environment output does not contain %q", required)
 		}
+	}
+}
+
+func TestEnvironmentCommandRejectsUnusedToken(t *testing.T) {
+	command := New("test", strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
+	command.SetArgs([]string{"environment", "--token", "argument-secret"})
+	err := command.Execute()
+	if err == nil || !strings.Contains(err.Error(), "--token is not used by the environment command") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
@@ -234,6 +245,21 @@ func TestAuthStatusExplainsUnavailableCredentialStore(t *testing.T) {
 	}
 }
 
+func TestInvalidServerConfigurationIncludesRecovery(t *testing.T) {
+	t.Setenv("SATEIA_CONFIG_DIR", t.TempDir())
+	command := New("test", strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
+	command.SetArgs([]string{"--server", "http://example.com", "auth", "status"})
+	err := command.Execute()
+	if err == nil {
+		t.Fatal("expected invalid server error")
+	}
+	for _, required := range []string{"invalid server configuration", "pass --server", "fix or unset SATEIA_SERVER"} {
+		if !strings.Contains(err.Error(), required) {
+			t.Errorf("error does not contain %q: %v", required, err)
+		}
+	}
+}
+
 func TestAuthStatusUsesTokenFileBeforeCredentialStore(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if request.Header.Get("Authorization") != "Bearer file-secret" {
@@ -276,6 +302,82 @@ func TestEnvironmentTokenTakesPrecedenceOverTokenFile(t *testing.T) {
 	}
 	if token != "environment-secret" || source != "environment" {
 		t.Fatalf("unexpected credential %q from %q", token, source)
+	}
+}
+
+func TestManualTokenTakesPrecedenceAndIsNotPrinted(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Header.Get("Authorization") != "Bearer argument-secret" {
+			t.Errorf("unexpected authorization %q", request.Header.Get("Authorization"))
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write([]byte(`{"nutrients":[]}`))
+	}))
+	defer server.Close()
+
+	t.Setenv("SATEIA_CONFIG_DIR", t.TempDir())
+	t.Setenv("SATEIA_TOKEN", "environment-secret")
+	t.Setenv("SATEIA_TOKEN_FILE", filepath.Join(t.TempDir(), "missing-token"))
+	var output bytes.Buffer
+	command := newWithStore("test", strings.NewReader(""), &output, &output, stubCredentialStore{})
+	command.SetArgs([]string{"--server", server.URL, "auth", "status", "--token", " argument-secret "})
+	if err := command.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output.String(), "credential_source: argument") {
+		t.Fatalf("unexpected output: %s", output.String())
+	}
+	if strings.Contains(output.String(), "argument-secret") {
+		t.Fatalf("output contains token secret: %s", output.String())
+	}
+}
+
+func TestManualTokenRejectsExplicitEmptyValue(t *testing.T) {
+	t.Setenv("SATEIA_CONFIG_DIR", t.TempDir())
+	t.Setenv("SATEIA_TOKEN", "environment-secret")
+	command := newWithStore("test", strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{}, stubCredentialStore{})
+	command.SetArgs([]string{"auth", "status", "--token", "   "})
+	if err := command.Execute(); err == nil || !strings.Contains(err.Error(), "--token must not be empty") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestAuthStatusExplainsUnusableTokenFile(t *testing.T) {
+	t.Setenv("SATEIA_CONFIG_DIR", t.TempDir())
+	t.Setenv("SATEIA_TOKEN", "")
+	t.Setenv("SATEIA_TOKEN_FILE", filepath.Join(t.TempDir(), "missing-token"))
+	command := newWithStore("test", strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{}, stubCredentialStore{})
+	command.SetArgs([]string{"auth", "status"})
+	err := command.Execute()
+	if err == nil {
+		t.Fatal("expected token file error")
+	}
+	for _, required := range []string{"authentication token file is unusable", "fix the file selected by SATEIA_TOKEN_FILE", "unset SATEIA_TOKEN_FILE"} {
+		if !strings.Contains(err.Error(), required) {
+			t.Errorf("error does not contain %q: %v", required, err)
+		}
+	}
+}
+
+func TestAuthenticationCheckErrorUsesCredentialSourceGuidance(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		source   string
+		required string
+	}{
+		{source: "argument", required: "supply a valid --token value"},
+		{source: "environment", required: "replace or unset SATEIA_TOKEN"},
+		{source: "token_file", required: "replace the secret in SATEIA_TOKEN_FILE"},
+		{source: "keyring", required: "sateia auth logout"},
+	}
+	for _, test := range tests {
+		t.Run(test.source, func(t *testing.T) {
+			t.Parallel()
+			err := authenticationCheckError(&api.APIError{StatusCode: http.StatusUnauthorized, Code: "UNAUTHENTICATED", Message: "Invalid token"}, test.source)
+			if !strings.Contains(err.Error(), test.required) {
+				t.Fatalf("error does not contain %q: %v", test.required, err)
+			}
+		})
 	}
 }
 
@@ -333,6 +435,32 @@ func TestAuthLoginWritesTokenFileWithoutKeyring(t *testing.T) {
 	}
 	if strings.Contains(string(configData), "file-secret") {
 		t.Fatalf("config contains token secret: %s", configData)
+	}
+}
+
+func TestAuthLoginRejectsEmptyDeviceNameBeforeExchange(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		requests++
+		writer.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	t.Setenv("SATEIA_CONFIG_DIR", t.TempDir())
+	t.Setenv("SATEIA_TOKEN", "")
+	t.Setenv("SATEIA_TOKEN_FILE", "")
+	store := stubCredentialStore{get: func(string) (string, error) { return "", credential.ErrNotFound }}
+	command := newWithStore("test", strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{}, store)
+	command.SetArgs([]string{
+		"--server", server.URL, "auth", "login",
+		"--device-code", "ABCD-EFGH", "--device-name", "   ",
+	})
+	err := command.Execute()
+	if err == nil || !strings.Contains(err.Error(), "device name must not be empty") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if requests != 0 {
+		t.Fatalf("device code must not be consumed, requests=%d", requests)
 	}
 }
 

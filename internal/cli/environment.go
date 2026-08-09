@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/spf13/cobra"
@@ -22,9 +23,13 @@ Authentication:
   - The CLI supplies this name during exchange as token metadata. It does not
     need to match a legacy app label. Never reuse one generic name across
     devices.
-  - Headless: set SATEIA_TOKEN or SATEIA_TOKEN_FILE. Never pass a token as a
-    command-line argument.
-  - Precedence: SATEIA_TOKEN, SATEIA_TOKEN_FILE, then the system keyring.
+  - One-off commands may use --token. Prefer SATEIA_TOKEN or SATEIA_TOKEN_FILE
+    for automation because command arguments may be exposed through shell
+    history or process inspection.
+  - Precedence: --token, SATEIA_TOKEN, SATEIA_TOKEN_FILE, then the system
+    keyring.
+  - Run "sateia auth status" to see credential_source without revealing the
+    token. An invalid credential produces source-specific replacement steps.
 
 Credential storage:
   - macOS Keychain, Linux Secret Service, or Windows Credential Manager.
@@ -32,6 +37,8 @@ Credential storage:
     secret, a mounted token file, or "auth login --token-file <new-path>".
   - --token-file reserves a new file with mode 0600 before consuming the code.
     Set SATEIA_TOKEN_FILE to that path for later commands.
+  - --token is never stored. SATEIA_TOKEN and SATEIA_TOKEN_FILE remain owned by
+    the environment or secret manager that supplied them.
   - config.json contains only server and token metadata, never the token secret.
   - "sateia auth logout" removes only a keyring credential. Environment and
     token-file credentials remain owned by their secret manager.
@@ -43,9 +50,11 @@ Safe agent workflow:
   2. Run "sateia record list --help" before a read. Use explicit RFC 3339
      bounds and keep every filter unchanged when continuing with --cursor.
   3. Run "sateia auth status" before a write.
-  4. Run "sateia record create --help" and validate all required values.
-  5. Use --json for machine-readable query and mutation output.
-  6. After an ambiguous network failure, retry the exact same request with
+  4. Create a record only after the user requests the write. Preserve the
+     supplied consumed time and nutrient values; do not invent missing input.
+  5. Run "sateia record create --help" and validate all required values.
+  6. Use --json for machine-readable query and mutation output.
+  7. After an ambiguous network failure, retry the exact same request with
      both the printed --record-id and --mutation-id. Never generate new IDs
      for that retry.
 
@@ -75,6 +84,9 @@ func (app *application) newEnvironmentCommand() *cobra.Command {
 		Long:  environmentGuide,
 		Args:  cobra.NoArgs,
 		RunE: func(command *cobra.Command, _ []string) error {
+			if app.manualTokenSet {
+				return errors.New("--token is not used by the environment command\nNext: omit --token to print guidance, or use it with auth status, record list, or record create")
+			}
 			fmt.Fprintln(app.out, environmentGuide)
 			app.writeHumanNotices(command.Context())
 			return nil

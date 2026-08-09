@@ -24,8 +24,9 @@ func (app *application) newAuthCommand() *cobra.Command {
 		Long: `Manage the CLI credential used for Sateia API requests.
 
 Interactive login exchanges an app-issued, five-minute code for an independent
-CLI token. Headless agents may provide SATEIA_TOKEN or SATEIA_TOKEN_FILE. Run
-"sateia environment" for device naming, storage, and precedence details.`,
+CLI token. One-off commands may provide --token; headless agents should prefer
+SATEIA_TOKEN or SATEIA_TOKEN_FILE. Run "sateia environment" for device naming,
+credential precedence, storage ownership, and recovery instructions.`,
 	}
 	command.AddCommand(app.newLoginCommand(), app.newStatusCommand(), app.newLogoutCommand())
 	return command
@@ -65,30 +66,33 @@ the CLI creates it with private permissions before consuming the device code.`,
     --token-file /secure/path/sateia-token`,
 		Args: cobra.NoArgs,
 		RunE: func(command *cobra.Command, _ []string) error {
+			if app.manualTokenSet {
+				return errors.New("--token cannot be used with auth login because login creates and stores a new token\nNext: omit --token, then retry auth login with an app-issued device code")
+			}
 			baseURL, stored, err := app.baseURL()
 			if err != nil {
 				return err
 			}
 			if strings.TrimSpace(os.Getenv("SATEIA_TOKEN")) != "" {
-				return errors.New("SATEIA_TOKEN is set; unset it before storing a different token")
+				return errors.New("SATEIA_TOKEN already selects an environment-managed token\nNext: unset SATEIA_TOKEN before storing a different token with auth login")
 			}
 			if strings.TrimSpace(os.Getenv("SATEIA_TOKEN_FILE")) != "" {
-				return errors.New("SATEIA_TOKEN_FILE is set; unset it before storing a different token")
+				return errors.New("SATEIA_TOKEN_FILE already selects a file-managed token\nNext: unset SATEIA_TOKEN_FILE before storing a different token with auth login")
 			}
 
 			var prepared *credential.PreparedTokenFile
 			if tokenFile != "" {
 				prepared, err = credential.PrepareTokenFile(tokenFile)
 				if err != nil {
-					return err
+					return fmt.Errorf("prepare token file: %w\nNext: choose a new path whose parent directory exists; auth login never overwrites a token file", err)
 				}
 				defer prepared.Abort()
 			} else if existing, getErr := app.store.Get(baseURL); getErr == nil && existing != "" {
-				return errors.New("a token is already stored for this server; run 'sateia auth logout' first")
+				return errors.New("a keyring token is already stored for this server\nNext: run \"sateia auth status\" to verify it, or \"sateia auth logout\" before storing a replacement")
 			} else if errors.Is(getErr, credential.ErrUnavailable) {
 				return credentialStoreUnavailableError("access system credential store", getErr)
 			} else if getErr != nil && !errors.Is(getErr, credential.ErrNotFound) {
-				return fmt.Errorf("access system credential store: %w", getErr)
+				return fmt.Errorf("access system credential store: %w\nNext: resolve the keyring error, or retry with --token-file <new-path> on a headless system", getErr)
 			}
 
 			reader := bufio.NewReader(app.in)
@@ -100,7 +104,7 @@ the CLI creates it with private permissions before consuming the device code.`,
 				fmt.Fprintf(app.errOut, "Stable, recognizable device name for this machine [%s]: ", defaultName)
 				line, readErr := reader.ReadString('\n')
 				if readErr != nil && len(line) == 0 {
-					return fmt.Errorf("read device name: %w", readErr)
+					return fmt.Errorf("read device name: %w\nNext: retry with --device-name on a non-interactive terminal", readErr)
 				}
 				deviceName = strings.TrimSpace(line)
 				if deviceName == "" {
@@ -108,20 +112,23 @@ the CLI creates it with private permissions before consuming the device code.`,
 				}
 			}
 			deviceName = strings.TrimSpace(deviceName)
+			if deviceName == "" {
+				return errors.New("device name must not be empty\nNext: pass --device-name with a stable name that identifies this machine, or omit the flag to use the interactive prompt")
+			}
 			if len([]rune(deviceName)) > 100 {
-				return errors.New("device name must contain at most 100 characters")
+				return errors.New("device name must contain at most 100 characters\nNext: shorten --device-name while keeping it specific to this machine")
 			}
 			if deviceCode == "" {
 				fmt.Fprint(app.errOut, "Device code from the Sateia app: ")
 				line, readErr := reader.ReadString('\n')
 				if readErr != nil && len(line) == 0 {
-					return fmt.Errorf("read device code: %w", readErr)
+					return fmt.Errorf("read device code: %w\nNext: retry with both --device-code and --device-name on a non-interactive terminal", readErr)
 				}
 				deviceCode = line
 			}
 			deviceCode = strings.ToUpper(strings.TrimSpace(deviceCode))
 			if !pairingCodePattern.MatchString(deviceCode) {
-				return errors.New("device code must match ABCD-EFGH using the characters shown in the app")
+				return errors.New("device code must match ABCD-EFGH using the characters shown in the app\nNext: copy the current code from Sateia app > Settings > CLI Access without adding spaces")
 			}
 
 			client, err := api.NewClient(baseURL, "", app.version, nil)
@@ -135,21 +142,24 @@ the CLI creates it with private permissions before consuming the device code.`,
 			credentialSource := "system keyring"
 			if prepared != nil {
 				if err := prepared.Commit(issued.Token); err != nil {
-					return fmt.Errorf("store token in token file: %w; the code was consumed, so secure the partial file, create a new code, and retry", err)
+					return fmt.Errorf("store token in token file: %w\nThe device code was consumed, and the uncommitted token file will be removed.\nNext: resolve the file error, create a new app code, and retry with a new path", err)
 				}
 				credentialSource = "token_file"
 			} else if err := app.store.Set(baseURL, issued.Token); err != nil {
 				if errors.Is(err, credential.ErrUnavailable) {
-					return fmt.Errorf("store token in system credential store: %w; the code was consumed, so create a new code and retry with --token-file on headless Linux", err)
+					return fmt.Errorf("store token in system credential store: %w\nThe device code was consumed, but no credential was stored.\nNext: on headless Linux, create a new app code and retry with --token-file <new-path>", err)
 				}
-				return fmt.Errorf("store token in system credential store: %w; the code was consumed, so create a new code and retry", err)
+				return fmt.Errorf("store token in system credential store: %w\nThe device code was consumed, but no credential was stored.\nNext: resolve the keyring error, create a new app code, and retry", err)
 			}
 			stored.BaseURL = baseURL
 			stored.TokenID = issued.TokenID
 			stored.ExpiresAt = &issued.ExpiresAt
 			stored.DeviceName = deviceName
 			if err := config.Save(stored); err != nil {
-				return fmt.Errorf("credential stored but save non-secret metadata: %w", err)
+				if prepared != nil {
+					return fmt.Errorf("token stored in %s but save non-secret metadata: %w\nNext: set SATEIA_TOKEN_FILE=%q and run \"sateia --server %s auth status\"; do not exchange the code again", prepared.Path(), err, prepared.Path(), baseURL)
+				}
+				return fmt.Errorf("keyring token stored but save non-secret metadata: %w\nNext: run \"sateia --server %s auth status\"; repair the configuration location before changing credentials", err, baseURL)
 			}
 			fmt.Fprintf(app.out, `Authentication succeeded.
 server: %s
@@ -185,9 +195,9 @@ func (app *application) newStatusCommand() *cobra.Command {
 		Short: "Verify the current token",
 		Long: `Verify the effective credential with a read-only API request.
 
-Credential precedence is SATEIA_TOKEN, then SATEIA_TOKEN_FILE, then the system
-credential store. This command does not reveal the token secret and does not
-write nutrition data.`,
+Credential precedence is --token, SATEIA_TOKEN, SATEIA_TOKEN_FILE, then the
+system credential store. This command does not reveal the token secret and
+does not write nutrition data.`,
 		Args: cobra.NoArgs,
 		RunE: func(command *cobra.Command, _ []string) error {
 			baseURL, stored, err := app.baseURL()
@@ -195,14 +205,8 @@ write nutrition data.`,
 				return err
 			}
 			token, source, err := app.token(baseURL)
-			if errors.Is(err, credential.ErrNotFound) {
-				return errors.New("not logged in; run 'sateia auth login' or set SATEIA_TOKEN or SATEIA_TOKEN_FILE")
-			}
-			if errors.Is(err, credential.ErrUnavailable) {
-				return credentialStoreUnavailableError("read token from system credential store", err)
-			}
 			if err != nil {
-				return fmt.Errorf("read authentication token: %w", err)
+				return authenticationTokenError(err, source)
 			}
 			client, err := api.NewClient(baseURL, token, app.version, nil)
 			if err != nil {
@@ -219,7 +223,7 @@ write nutrition data.`,
 			if metadata.RequestID != "" {
 				fmt.Fprintf(app.out, "request_id: %s\n", metadata.RequestID)
 			}
-			fmt.Fprintln(app.out, `Next: run "sateia record create --help" before writing a record.`)
+			fmt.Fprintln(app.out, `Next: run "sateia record list --help" for a read or "sateia record create --help" before a write.`)
 			app.writeHumanNotices(command.Context())
 			return nil
 		},
@@ -237,11 +241,14 @@ Sateia app when the credential must become invalid everywhere. Environment and
 token-file credentials are managed by their owner and are not deleted.`,
 		Args: cobra.NoArgs,
 		RunE: func(command *cobra.Command, _ []string) error {
+			if app.manualTokenSet {
+				return errors.New("--token is used only for the current invocation and is not stored by the CLI\nNext: omit --token to remove a keyring credential, or revoke the token in Sateia app > Settings > CLI Access")
+			}
 			if strings.TrimSpace(os.Getenv("SATEIA_TOKEN")) != "" {
-				return errors.New("SATEIA_TOKEN is set in the environment; unset it to log out")
+				return errors.New("SATEIA_TOKEN is managed by the environment and cannot be removed by auth logout\nNext: unset or replace SATEIA_TOKEN at its source; revoke it in the Sateia app if it must stop working")
 			}
 			if strings.TrimSpace(os.Getenv("SATEIA_TOKEN_FILE")) != "" {
-				return errors.New("SATEIA_TOKEN_FILE is set; remove the token at its managed source or unset it before using keyring logout")
+				return errors.New("SATEIA_TOKEN_FILE points to an owner-managed token file that auth logout will not delete\nNext: remove or replace that secret at its source, or unset SATEIA_TOKEN_FILE before removing a keyring credential")
 			}
 			baseURL, stored, err := app.baseURL()
 			if err != nil {
@@ -256,7 +263,7 @@ token-file credentials are managed by their owner and are not deleted.`,
 			stored.ExpiresAt = nil
 			stored.DeviceName = ""
 			if err := config.Save(stored); err != nil {
-				return err
+				return fmt.Errorf("keyring credential removed but clear non-secret metadata: %w\nNext: repair the configuration location; the local keyring token is already removed, but the server token is not revoked", err)
 			}
 			fmt.Fprintf(app.out, `Local authentication removed.
 server: %s
@@ -269,30 +276,49 @@ To invalidate the token on the server, revoke it in Sateia app > Settings > CLI 
 }
 
 func credentialStoreUnavailableError(action string, err error) error {
-	return fmt.Errorf("%s: %w\nNext: on headless Linux, set SATEIA_TOKEN or SATEIA_TOKEN_FILE, or create a new code and run auth login with --token-file <new-path>; otherwise start a Secret Service provider and user D-Bus session", action, err)
+	return fmt.Errorf("%s: %w\nNext: supply --token for a one-off command; on headless Linux, set SATEIA_TOKEN or SATEIA_TOKEN_FILE, or create a new code and run auth login with --token-file <new-path>; otherwise start a Secret Service provider and user D-Bus session", action, err)
+}
+
+func authenticationTokenError(err error, source string) error {
+	if errors.Is(err, credential.ErrNotFound) {
+		return errors.New("no authentication credential was found\nNext: run \"sateia auth login\", supply --token for this invocation, or set SATEIA_TOKEN or SATEIA_TOKEN_FILE")
+	}
+	if errors.Is(err, credential.ErrUnavailable) {
+		return credentialStoreUnavailableError("read token from system credential store", err)
+	}
+	if source == "token_file" {
+		return fmt.Errorf("authentication token file is unusable: %w\nNext: fix the file selected by SATEIA_TOKEN_FILE, or unset SATEIA_TOKEN_FILE and choose another credential source", err)
+	}
+	return fmt.Errorf("read authentication token: %w\nNext: resolve the credential-store error, then run \"sateia auth status\" again", err)
 }
 
 func loginErrorWithGuidance(err error) error {
+	wrapped := fmt.Errorf("authentication exchange failed: %w", err)
 	var apiErr *api.APIError
 	if errors.As(err, &apiErr) {
 		switch apiErr.Code {
 		case "INVALID_PAIRING_CODE":
-			return fmt.Errorf("%w\nNext: create a new code in Sateia app > Settings > CLI Access and retry with the exact same device name", err)
+			return fmt.Errorf("%w\nNext: create a new code in Sateia app > Settings > CLI Access and retry with the same device name", wrapped)
 		case "RATE_LIMIT_EXCEEDED":
-			return fmt.Errorf("%w\nNext: wait before creating a new code and retrying", err)
+			return fmt.Errorf("%w\nNext: wait for the rate limit to clear; if the five-minute code expires, create a new code and retry with the same device name", wrapped)
 		}
 	}
-	return err
+	return fmt.Errorf("%w\nNo credential was stored. If the exchange outcome is unknown, create a new app code and retry with the same device name; do not assume authentication succeeded", wrapped)
 }
 
 func authenticationCheckError(err error, source string) error {
 	wrapped := fmt.Errorf("authentication check failed: %w", err)
 	var apiErr *api.APIError
 	if !errors.As(err, &apiErr) || apiErr.Code != "UNAUTHENTICATED" {
-		return wrapped
+		return fmt.Errorf("%w\nNext: check the server URL and connectivity, then retry \"sateia auth status\"", wrapped)
 	}
-	if source == "environment" {
+	switch source {
+	case "argument":
+		return fmt.Errorf("%w\nNext: supply a valid --token value, then run \"sateia auth status\" again", wrapped)
+	case "environment":
 		return fmt.Errorf("%w\nNext: replace or unset SATEIA_TOKEN, then run \"sateia auth status\" again", wrapped)
+	case "token_file":
+		return fmt.Errorf("%w\nNext: replace the secret in SATEIA_TOKEN_FILE or unset it and choose another credential source, then run \"sateia auth status\" again", wrapped)
 	}
 	return fmt.Errorf("%w\nNext: run \"sateia auth logout\", create a new app code, and run \"sateia auth login\"", wrapped)
 }
