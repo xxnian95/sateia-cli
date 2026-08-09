@@ -104,6 +104,15 @@ type NutritionRecord struct {
 	DeletedAt                     *time.Time        `json:"deleted_at"`
 }
 
+type DailyGoal struct {
+	GoalDate  string            `json:"goal_date"`
+	Nutrients map[string]string `json:"nutrients"`
+}
+
+type DailyGoalInput struct {
+	Nutrients map[string]string `json:"nutrients"`
+}
+
 type ListNutritionRecordsOptions struct {
 	ConsumedFrom   time.Time
 	ConsumedBefore time.Time
@@ -215,6 +224,38 @@ func (client *Client) CreateNutritionRecord(ctx context.Context, request CreateR
 		return NutritionRecord{}, metadata, responseMetadataError(metadata, errors.New("server returned an incomplete nutrition record"))
 	}
 	return response.Record, metadata, nil
+}
+
+func (client *Client) GetDailyGoal(ctx context.Context, date string) (DailyGoal, ResponseMetadata, error) {
+	var response struct {
+		DailyGoal DailyGoal `json:"daily_goal"`
+	}
+	metadata, err := client.do(ctx, http.MethodGet, "/v1/daily-goals/"+url.PathEscape(date), nil, true, http.StatusOK, &response)
+	if err != nil {
+		return DailyGoal{}, metadata, err
+	}
+	if response.DailyGoal.GoalDate == "" || response.DailyGoal.Nutrients == nil {
+		return DailyGoal{}, metadata, responseMetadataError(metadata, errors.New("server returned an incomplete daily goal"))
+	}
+	return response.DailyGoal, metadata, nil
+}
+
+func (client *Client) PutDailyGoal(ctx context.Context, date string, input DailyGoalInput) (DailyGoal, ResponseMetadata, error) {
+	var response struct {
+		DailyGoal DailyGoal `json:"daily_goal"`
+	}
+	metadata, err := client.do(ctx, http.MethodPut, "/v1/daily-goals/"+url.PathEscape(date), input, true, http.StatusOK, &response)
+	if err != nil {
+		return DailyGoal{}, metadata, err
+	}
+	if response.DailyGoal.GoalDate == "" || response.DailyGoal.Nutrients == nil {
+		return DailyGoal{}, metadata, responseMetadataError(metadata, errors.New("server returned an incomplete daily goal"))
+	}
+	return response.DailyGoal, metadata, nil
+}
+
+func (client *Client) DeleteDailyGoal(ctx context.Context, date string) (ResponseMetadata, error) {
+	return client.do(ctx, http.MethodDelete, "/v1/daily-goals/"+url.PathEscape(date), nil, true, http.StatusNoContent, nil)
 }
 
 func (client *Client) UpdateNutritionRecord(ctx context.Context, recordID string, request UpdateRecordRequest) (NutritionRecord, ResponseMetadata, error) {

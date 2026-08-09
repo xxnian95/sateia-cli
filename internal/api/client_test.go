@@ -105,6 +105,48 @@ func TestCreateNutritionRecordUsesBearerToken(t *testing.T) {
 	}
 }
 
+func TestDailyGoalMethodsUseCalendarDateResource(t *testing.T) {
+	t.Parallel()
+	methods := make(chan string, 3)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/v1/daily-goals/2026-08-09" {
+			t.Fatalf("unexpected path %q", request.URL.Path)
+		}
+		if request.Header.Get("Authorization") != "Bearer secret" {
+			t.Fatalf("unexpected authorization %q", request.Header.Get("Authorization"))
+		}
+		methods <- request.Method
+		writer.Header().Set("X-Request-ID", "request-goal")
+		if request.Method == http.MethodDelete {
+			writer.WriteHeader(http.StatusNoContent)
+			return
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write([]byte(`{"daily_goal":{"goal_date":"2026-08-09","nutrients":{"energy":"2200","protein":"140","carbohydrate":"240","fat":"70"}}}`))
+	}))
+	defer server.Close()
+
+	client, err := NewClient(server.URL, "secret", "test", server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := client.GetDailyGoal(context.Background(), "2026-08-09"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := client.PutDailyGoal(context.Background(), "2026-08-09", DailyGoalInput{Nutrients: map[string]string{"energy": "2200", "protein": "140", "carbohydrate": "240", "fat": "70"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.DeleteDailyGoal(context.Background(), "2026-08-09"); err != nil {
+		t.Fatal(err)
+	}
+
+	for index, want := range []string{http.MethodGet, http.MethodPut, http.MethodDelete} {
+		if got := <-methods; got != want {
+			t.Fatalf("request %d method = %s, want %s", index, got, want)
+		}
+	}
+}
+
 func TestNormalizeBaseURLRejectsRemoteHTTP(t *testing.T) {
 	t.Parallel()
 	if _, err := NormalizeBaseURL("http://example.com"); err == nil {
