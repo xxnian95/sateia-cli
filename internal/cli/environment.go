@@ -50,13 +50,14 @@ Safe agent workflow:
   2. Run "sateia record list --help" before a read. Use explicit RFC 3339
      bounds and keep every filter unchanged when continuing with --cursor.
   3. Run "sateia auth status" before a write.
-  4. Create a record only after the user requests the write. Preserve the
-     supplied consumed time and nutrient values; do not invent missing input.
-  5. Run "sateia record create --help" and validate all required values.
+  4. Mutate a record only after the user requests that exact write. Preserve
+     supplied values, and never infer a record ID or expected version.
+  5. Run the selected create, update, or delete subcommand with --help and
+     validate every required value and legal flag combination.
   6. Use --json for machine-readable query and mutation output.
-  7. After an ambiguous network failure, retry the exact same request with
-     both the printed --record-id and --mutation-id. Never generate new IDs
-     for that retry.
+  7. After an ambiguous network failure, retry the exact same request with all
+     printed identifiers. Update and delete retries must also preserve
+     --expected-version. Never change a payload while reusing mutation_id.
 
 Response notices and updates:
   - JSON responses include a top-level _notice list. Inspect each code and
@@ -85,7 +86,7 @@ func (app *application) newEnvironmentCommand() *cobra.Command {
 		Args:  cobra.NoArgs,
 		RunE: func(command *cobra.Command, _ []string) error {
 			if app.manualTokenSet {
-				return errors.New("--token is not used by the environment command\nNext: omit --token to print guidance, or use it with auth status, record list, or record create")
+				return errors.New("--token is not used by the environment command\nNext: omit --token to print guidance, or use it with auth status or a record operation")
 			}
 			fmt.Fprintln(app.out, environmentGuide)
 			app.writeHumanNotices(command.Context())

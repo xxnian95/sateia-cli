@@ -42,12 +42,17 @@ func (app *application) newRecordCommand() *cobra.Command {
 		Short: "Manage nutrition records",
 		Long: `Query and manage server-side nutrition records.
 
-Use "sateia record list --help" for read-only queries. Record creation is a
-write operation; verify authentication and inspect "sateia record create
---help" before invoking it. Use --json when another program or an AI agent will
-consume the result.`,
+Use "sateia record list --help" for read-only queries. Create, update, and
+delete are write operations; verify authentication and inspect the selected
+subcommand's help before invoking it. Use --json when another program or an AI
+agent will consume the result.`,
 	}
-	command.AddCommand(app.newRecordListCommand(), app.newRecordCreateCommand())
+	command.AddCommand(
+		app.newRecordListCommand(),
+		app.newRecordCreateCommand(),
+		app.newRecordUpdateCommand(),
+		app.newRecordDeleteCommand(),
+	)
 	return command
 }
 

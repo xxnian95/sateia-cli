@@ -223,7 +223,7 @@ does not write nutrition data.`,
 			if metadata.RequestID != "" {
 				fmt.Fprintf(app.out, "request_id: %s\n", metadata.RequestID)
 			}
-			fmt.Fprintln(app.out, `Next: run "sateia record list --help" for a read or "sateia record create --help" before a write.`)
+			fmt.Fprintln(app.out, `Next: run "sateia record list --help" for a read, or inspect the selected create, update, or delete subcommand before a write.`)
 			app.writeHumanNotices(command.Context())
 			return nil
 		},

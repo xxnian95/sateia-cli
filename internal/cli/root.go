@@ -16,7 +16,7 @@ import (
 
 const defaultServer = "https://xxnian.site/sateia-server"
 
-const rootDescription = `Sateia reads and creates server-side nutrition records that synchronize to the
+const rootDescription = `Sateia reads and mutates server-side nutrition records that synchronize to the
 Sateia app.
 
 Quick start:
@@ -24,8 +24,9 @@ Quick start:
   2. Identify this machine with hostname and choose a stable device name.
   3. Run "sateia auth login" with the chosen device name and code.
   4. Run "sateia auth status" to verify the credential.
-  5. Run "sateia record list --help" for a read or
-     "sateia record create --help" before a write.
+  5. Run "sateia record list --help" for a read. Before a write, inspect
+     "sateia record create --help", "sateia record update --help", or
+     "sateia record delete --help".
 
 If you already have a token, use --token for one invocation or prefer
 SATEIA_TOKEN or SATEIA_TOKEN_FILE for automation. Command-line tokens may be
@@ -78,7 +79,9 @@ func newWithDependencies(version string, in io.Reader, out, errOut io.Writer, st
 
   # Inspect each operation before running it
   sateia record list --help
-  sateia record create --help`,
+  sateia record create --help
+  sateia record update --help
+  sateia record delete --help`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		Version:       version,

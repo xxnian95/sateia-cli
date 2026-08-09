@@ -141,6 +141,29 @@ func TestHelpTeachesCompleteAgentWorkflow(t *testing.T) {
 				"--json",
 			},
 		},
+		{
+			name: "record update",
+			args: []string{"record", "update", "--help"},
+			required: []string{
+				"--expected-version",
+				"all four nutrient flags are required",
+				"--clear-note",
+				"ambiguous network",
+				"new mutation ID",
+				"--json",
+			},
+		},
+		{
+			name: "record delete",
+			args: []string{"record", "delete", "--help"},
+			required: []string{
+				"Soft-delete",
+				"--expected-version",
+				"same record ID, expected version, and mutation ID",
+				"cannot restore",
+				"--json",
+			},
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -176,7 +199,7 @@ func TestEnvironmentCommandTeachesCredentialSafetyAndRetry(t *testing.T) {
 		"current machine",
 		"never the token secret",
 		"removes only a keyring credential",
-		"both the printed --record-id and --mutation-id",
+		"Update and delete retries must also preserve --expected-version",
 		"top-level _notice list",
 		"SATEIA_NO_UPDATE_NOTIFIER",
 		"top-level request_id",

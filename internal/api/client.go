@@ -50,6 +50,47 @@ type CreateRecordRequest struct {
 	Record     NutritionRecordInput `json:"record"`
 }
 
+type OptionalString struct {
+	Set   bool
+	Value *string
+}
+
+type UpdateRecordRequest struct {
+	MutationID                    string
+	ExpectedVersion               int64
+	ConsumedAt                    *time.Time
+	ConsumedTimeZoneOffsetMinutes *int
+	Nutrients                     map[string]string
+	Note                          OptionalString
+}
+
+func (request UpdateRecordRequest) MarshalJSON() ([]byte, error) {
+	payload := map[string]any{
+		"mutation_id":      request.MutationID,
+		"expected_version": request.ExpectedVersion,
+	}
+	if request.ConsumedAt != nil {
+		payload["consumed_at"] = request.ConsumedAt
+	}
+	if request.ConsumedTimeZoneOffsetMinutes != nil {
+		payload["consumed_time_zone_offset_minutes"] = request.ConsumedTimeZoneOffsetMinutes
+	}
+	if request.Nutrients != nil {
+		payload["nutrients"] = request.Nutrients
+	}
+	if request.Note.Set {
+		// A set nil value is an explicit JSON null; an unset value must be omitted.
+		payload["note"] = request.Note.Value
+	}
+	return json.Marshal(payload)
+}
+
+type DeletionTombstone struct {
+	RecordID  string    `json:"record_id"`
+	Version   int64     `json:"version"`
+	DeletedAt time.Time `json:"deleted_at"`
+}
+
 type NutritionRecord struct {
 	RecordID                      string            `json:"record_id"`
 	ConsumedAt                    time.Time         `json:"consumed_at"`
@@ -174,6 +215,65 @@ func (client *Client) CreateNutritionRecord(ctx context.Context, request CreateR
 		return NutritionRecord{}, metadata, responseMetadataError(metadata, errors.New("server returned an incomplete nutrition record"))
 	}
 	return response.Record, metadata, nil
+}
+
+func (client *Client) UpdateNutritionRecord(ctx context.Context, recordID string, request UpdateRecordRequest) (NutritionRecord, ResponseMetadata, error) {
+	if strings.TrimSpace(recordID) == "" {
+		return NutritionRecord{}, ResponseMetadata{}, errors.New("record ID is required")
+	}
+	if strings.TrimSpace(request.MutationID) == "" {
+		return NutritionRecord{}, ResponseMetadata{}, errors.New("mutation ID is required")
+	}
+	if request.ExpectedVersion < 1 {
+		return NutritionRecord{}, ResponseMetadata{}, errors.New("expected version must be at least one")
+	}
+	if request.ConsumedAt == nil && request.ConsumedTimeZoneOffsetMinutes == nil && request.Nutrients == nil && !request.Note.Set {
+		return NutritionRecord{}, ResponseMetadata{}, errors.New("update request must contain at least one mutable field")
+	}
+	if (request.ConsumedAt == nil) != (request.ConsumedTimeZoneOffsetMinutes == nil) {
+		return NutritionRecord{}, ResponseMetadata{}, errors.New("consumed time and time zone offset must be updated together")
+	}
+
+	var response struct {
+		Record NutritionRecord `json:"record"`
+	}
+	path := "/v1/nutrition-records/" + url.PathEscape(recordID)
+	metadata, err := client.do(ctx, http.MethodPatch, path, request, true, http.StatusOK, &response)
+	if err != nil {
+		return NutritionRecord{}, metadata, err
+	}
+	if response.Record.RecordID == "" || response.Record.Version < 1 {
+		return NutritionRecord{}, metadata, responseMetadataError(metadata, errors.New("server returned an incomplete nutrition record"))
+	}
+	return response.Record, metadata, nil
+}
+
+func (client *Client) DeleteNutritionRecord(ctx context.Context, recordID, mutationID string, expectedVersion int64) (DeletionTombstone, ResponseMetadata, error) {
+	if strings.TrimSpace(recordID) == "" {
+		return DeletionTombstone{}, ResponseMetadata{}, errors.New("record ID is required")
+	}
+	if strings.TrimSpace(mutationID) == "" {
+		return DeletionTombstone{}, ResponseMetadata{}, errors.New("mutation ID is required")
+	}
+	if expectedVersion < 1 {
+		return DeletionTombstone{}, ResponseMetadata{}, errors.New("expected version must be at least one")
+	}
+
+	query := url.Values{}
+	query.Set("mutationId", mutationID)
+	query.Set("expectedVersion", strconv.FormatInt(expectedVersion, 10))
+	var response struct {
+		Tombstone DeletionTombstone `json:"tombstone"`
+	}
+	path := "/v1/nutrition-records/" + url.PathEscape(recordID) + "?" + query.Encode()
+	metadata, err := client.do(ctx, http.MethodDelete, path, nil, true, http.StatusOK, &response)
+	if err != nil {
+		return DeletionTombstone{}, metadata, err
+	}
+	if response.Tombstone.RecordID == "" || response.Tombstone.Version < 1 || response.Tombstone.DeletedAt.IsZero() {
+		return DeletionTombstone{}, metadata, responseMetadataError(metadata, errors.New("server returned an incomplete deletion tombstone"))
+	}
+	return response.Tombstone, metadata, nil
 }
 
 func (client *Client) ListNutritionRecords(ctx context.Context, options ListNutritionRecordsOptions) (NutritionRecordPage, ResponseMetadata, error) {
