@@ -98,7 +98,7 @@ func newWithDependencies(version string, in io.Reader, out, errOut io.Writer, st
 	}
 	root.PersistentFlags().StringVar(&app.server, "server", "", "Sateia API base URL (or SATEIA_SERVER)")
 	root.PersistentFlags().StringVar(&app.manualToken, "token", "", "token for this invocation (highest precedence; may be exposed by the shell or process list)")
-	root.AddCommand(app.newAuthCommand(), app.newRecordCommand(), app.newEnvironmentCommand())
+	root.AddCommand(app.newAuthCommand(), app.newRecordCommand(), app.newGoalCommand(), app.newEnvironmentCommand())
 	return root
 }
 
