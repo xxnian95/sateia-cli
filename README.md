@@ -72,6 +72,137 @@ sateia goal delete 2026-08-09
 All four nutrient flags are required by `goal set`. Values must be
 non-negative decimals with at most six fractional digits.
 
+## Practical workflows
+
+The CLI accepts structured nutrition values; it does not inspect images or
+calculate nutrition by itself. An AI agent can interpret a meal photo,
+nutrition label, recipe, or conversation, but it should show the proposed
+record to the user before writing whenever the values are estimated or the
+request is ambiguous.
+
+| User request | Agent workflow | CLI operation |
+| --- | --- | --- |
+| “Record this meal from the photo.” | Identify foods, resolve portion and time, present an estimate, then ask for confirmation | `record create` |
+| “I ate 1.5 servings from this label.” | Read per-serving values, calculate the consumed amount, and confirm the result | `record create` |
+| “How much did I eat today?” | Query the local-day window, follow every page, then total the returned values | `record list` |
+| “The lunch entry is wrong.” | Find the exact record and version, confirm the correction, then update it | `record update` |
+| “Delete the duplicate entry.” | Find both records, identify the duplicate, then soft-delete that exact version | `record delete` |
+
+### Record a meal from a photo with an AI agent
+
+A photo does not reliably reveal weight, hidden ingredients, cooking oil, or
+the exact nutrition of a dish. The agent should ask for details that materially
+change the estimate, such as portion size, ingredients, restaurant item, and
+meal time. If exact values are unavailable, label the result as an estimate.
+
+An example conversation:
+
+> **User:** Record this lunch from the photo. It was about 200 g of chicken,
+> one bowl of rice, and the meal was at 12:30 today.
+>
+> **Agent:** I estimate 610 kcal, 52 g protein, 68 g carbohydrate, and 14 g
+> fat. I will note that the values were estimated from the photo. Save this
+> record?
+>
+> **User:** Yes.
+
+After confirmation, the agent verifies authentication and creates the record:
+
+```sh
+sateia auth status
+
+sateia record create \
+  --energy 610 \
+  --protein 52 \
+  --carbohydrate 68 \
+  --fat 14 \
+  --note "Estimated from meal photo after user confirmation" \
+  --consumed-at 2026-08-09T12:30:00+08:00 \
+  --json
+```
+
+The numbers above are illustrative, not a reusable estimate for similar
+photos. The agent should report the returned `record_id`, `mutation_id`,
+version, and consumed time. A photo without an explicit request to save data
+must not create a record.
+
+### Record food from a nutrition-label photo
+
+The agent should transcribe the label, identify whether values are per serving
+or per package, and ask how much the user consumed. For example, if one serving
+contains 240 kcal, 8 g protein, 36 g carbohydrate, and 7 g fat, then 1.5
+servings becomes 360 kcal, 12 g protein, 54 g carbohydrate, and 10.5 g fat.
+After the user confirms both the serving count and calculated values:
+
+```sh
+sateia record create \
+  --energy 360 \
+  --protein 12 \
+  --carbohydrate 54 \
+  --fat 10.5 \
+  --note "1.5 servings from confirmed nutrition label" \
+  --consumed-at 2026-08-09T15:20:00+08:00 \
+  --json
+```
+
+### Review a day of intake
+
+The CLI returns records rather than a calculated daily total. An agent can
+query one local calendar day, follow `next_cursor` until `has_more` is false,
+and sum the four nutrient fields from the complete result set:
+
+```sh
+sateia record list \
+  --consumed-from 2026-08-09T00:00:00+08:00 \
+  --consumed-before 2026-08-10T00:00:00+08:00 \
+  --limit 100 \
+  --json
+```
+
+When another page exists, repeat the command with the same bounds and limit,
+adding the returned `next_cursor` as `--cursor`. The agent should state the
+queried time zone and whether deleted records were included when reporting the
+total.
+
+### Correct an existing record
+
+First query a narrow time window and identify the intended record by its
+`record_id`, consumed time, values, and current `version`. Present the proposed
+change before writing. A nutrient correction replaces all four nutrient
+values:
+
+```sh
+sateia record update \
+  --record-id 014b2680-df5b-4c8d-97ef-abde0a9746d6 \
+  --expected-version 1 \
+  --energy 580 \
+  --protein 48 \
+  --carbohydrate 64 \
+  --fat 13 \
+  --note "Corrected after user supplied the portion size" \
+  --json
+```
+
+For a note-only correction, omit the nutrient flags. On `VERSION_CONFLICT`,
+query the record again and review the new state instead of guessing a version.
+
+### Delete a duplicate record
+
+Query the relevant time window and compare the candidate records before
+deleting anything. Once the user or agent has unambiguously identified the
+duplicate, use its exact ID and current version:
+
+```sh
+sateia record delete \
+  --record-id 014b2680-df5b-4c8d-97ef-abde0a9746d6 \
+  --expected-version 2 \
+  --json
+```
+
+The command soft-deletes the record and returns a tombstone. The CLI cannot
+restore a deleted record, so an uncertain match should remain unchanged until
+the user clarifies which entry is the duplicate.
+
 ## Authentication
 
 ### Credential sources
