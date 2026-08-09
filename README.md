@@ -41,6 +41,7 @@ retry it.
 5. Inspect the operation you need:
 
    ```sh
+   sateia goal --help
    sateia record list --help
    sateia record create --help
    sateia record update --help
@@ -50,6 +51,26 @@ retry it.
 The one-time code is valid for five minutes and can be exchanged only once.
 The device name is metadata supplied by the CLI; it does not need to match an
 older label shown by the app.
+
+## Daily goals
+
+Daily goals are keyed by a calendar date in `yyyy-MM-dd` form. The date has no
+time or time-zone semantics. A custom goal takes precedence over the goals in
+the app's Settings for that date; deleting it restores the Settings fallback.
+
+```sh
+sateia goal set 2026-08-09 \
+  --energy 2200 \
+  --protein 140 \
+  --carbohydrate 240 \
+  --fat 70
+
+sateia goal get 2026-08-09 --json
+sateia goal delete 2026-08-09
+```
+
+All four nutrient flags are required by `goal set`. Values must be
+non-negative decimals with at most six fractional digits.
 
 ## Authentication
 
