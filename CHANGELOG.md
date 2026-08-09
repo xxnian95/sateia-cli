@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+### Features
+
+- Accept a one-off CLI token through the global `--token` flag, with precedence
+  over environment, token-file, and keyring credentials.
+
+### Changed
+
+- Add source-specific authentication recovery, safe list-query retry guidance,
+  and clearer validation errors across CLI commands.
+- Rewrite the user and AI-agent guide and add a separate Simplified Chinese
+  README.
+
 ## 1.0.0 (2026-08-07)
 
 ### Features

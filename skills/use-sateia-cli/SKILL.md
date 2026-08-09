@@ -1,6 +1,6 @@
 ---
 name: use-sateia-cli
-description: Use the public Sateia CLI to authenticate, query nutrition records, and create server-side nutrition records safely. Use when a user or agent needs to install or discover the sateia command, identify the current machine for device-code authentication, use SATEIA_TOKEN or SATEIA_TOKEN_FILE in headless automation, read or write energy and macronutrient data, interpret CLI output, paginate queries, or retry an ambiguous record write without duplication.
+description: Use the public Sateia CLI to authenticate, query nutrition records, and create server-side nutrition records safely. Use when a user or agent needs to install or discover the sateia command, identify the current machine for device-code authentication, supply a token with --token, SATEIA_TOKEN, or SATEIA_TOKEN_FILE, read or write energy and macronutrient data, interpret CLI output, paginate queries, or retry an ambiguous record write without duplication.
 ---
 
 # Use Sateia CLI
@@ -41,10 +41,14 @@ the record and mutation identifiers across ambiguous retries.
   sateia auth login --device-code ABCD-EFGH --device-name "Pengnian Mac"
   ```
 
-- For headless automation, use `SATEIA_TOKEN`. Never print it, pass it as a
-  command-line argument, store it in repository files, or include it in logs.
-- If a secret is supplied as a mounted file, set `SATEIA_TOKEN_FILE`. It has
-  lower precedence than `SATEIA_TOKEN` and higher precedence than the keyring.
+- For a one-off command, `--token` supplies a token with highest precedence and
+  does not persist it. Warn that command arguments may be exposed through shell
+  history or process inspection.
+- For headless automation, prefer `SATEIA_TOKEN`. Never print it, store it in
+  repository files, or include it in logs.
+- Credential precedence is `--token`, `SATEIA_TOKEN`, `SATEIA_TOKEN_FILE`, then
+  the system keyring. If a secret is supplied as a mounted file, set
+  `SATEIA_TOKEN_FILE`.
 - On headless Linux without Secret Service, `auth status` cannot inspect the
   keyring. Use a managed token or create a new path with `auth login
   --token-file`. The path's parent must exist and the CLI must be allowed to
@@ -125,6 +129,11 @@ success response.
   reuse a `mutation_id` with a different payload.
 - Authentication error: repair authentication first, then retry the exact
   original record request with its printed identifiers.
+- Invalid list cursor: restore every filter used to obtain the cursor, or omit
+  `--cursor` and start from the first page. Never edit or decode the cursor.
+- Invalid `--token`, `SATEIA_TOKEN`, or `SATEIA_TOKEN_FILE`: follow the
+  source-specific guidance from `sateia auth status`; do not log out an
+  unrelated keyring credential.
 - Invalid pairing code: create a new code and use the exact matching device name.
 - Ambiguous network or retryable server failure after a record request: reuse
   both identifiers printed by the CLI and repeat the exact same record payload.
@@ -144,7 +153,9 @@ success response.
 ## Red Flags
 
 - A generic device name reused across machines.
-- A token in command arguments, logs, repository files, or assistant output.
+- A token exposed in logs, repository files, or assistant output, or a
+  command-line token used without warning about shell history and process
+  inspection.
 - Device-code login on headless Linux without keyring access or `--token-file`.
 - Reusing an existing token-file path or changing filters with a pagination
   cursor.
@@ -174,8 +185,8 @@ success response.
 ## Verification
 
 - Run `sateia auth status` and require a zero exit before a write.
-- Confirm `credential_source` is the intended environment, token file, or
-  keyring source without printing the secret.
+- Confirm `credential_source` is the intended argument, environment, token
+  file, or keyring source without printing the secret.
 - For queries, inspect `has_more` and `next_cursor` until the requested scope is
   complete.
 - Inspect the top-level `_notice` list after a successful JSON command.

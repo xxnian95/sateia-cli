@@ -1,73 +1,84 @@
 # Sateia CLI
 
-`sateia` is the public command-line client for querying and writing nutrition
-records on a Sateia server. It exchanges a short-lived code displayed by the
-Sateia app for an independently revocable CLI token, stores that token in the
-operating system credential store or an explicitly selected private file, and
-uses it as a Bearer token for requests.
+English | [简体中文](README.zh-CN.md)
 
-## Install from source
+`sateia` reads and creates nutrition records on a Sateia server. Records
+created by the CLI synchronize to the Sateia app. The CLI supports interactive
+login, managed tokens for automation, one-page queries, machine-readable
+output, and idempotent create retries.
+
+The CLI currently lists and creates records. It does not edit or delete them.
+
+## Install
 
 Go 1.26 or newer is required.
 
 ```sh
 go install github.com/xxnian95/sateia-cli/cmd/sateia@latest
+sateia --version
 ```
 
-## Log in
+If the second command is not found, add the Go binary directory to `PATH` and
+retry it.
 
-In the Sateia app, open **Settings > CLI Access** and create a code. Before
-exchanging it, identify the current machine with `hostname`. Choose a stable,
-recognizable device name such as `agent-host-01 (Sateia CLI)`; do not reuse a
-generic name across devices. Then run the command below and enter the chosen
-device name when prompted. The CLI supplies this name during exchange as token
-metadata; it does not need to match a legacy label shown while creating the
-code:
+## Quick start
+
+1. Run `hostname` and choose a stable name for this machine, such as
+   `agent-host-01 (Sateia CLI)`.
+2. In Sateia app, open **Settings > CLI Access** and create a one-time code.
+3. Exchange the code and store the resulting token:
+
+   ```sh
+   sateia auth login \
+     --device-code ABCD-EFGH \
+     --device-name "agent-host-01 (Sateia CLI)"
+   ```
+
+4. Verify the stored credential:
+
+   ```sh
+   sateia auth status
+   ```
+
+5. Inspect the operation you need:
+
+   ```sh
+   sateia record list --help
+   sateia record create --help
+   ```
+
+The one-time code is valid for five minutes and can be exchanged only once.
+The device name is metadata supplied by the CLI; it does not need to match an
+older label shown by the app.
+
+## Authentication
+
+### Credential sources
+
+The CLI selects one credential for each invocation, in this order:
+
+| Priority | Source | Persistence | Intended use |
+| --- | --- | --- | --- |
+| 1 | `--token` | Not persisted | One-off commands |
+| 2 | `SATEIA_TOKEN` | Managed by the environment | Automation with an environment-managed secret |
+| 3 | `SATEIA_TOKEN_FILE` | Managed as a secret file; `auth login --token-file` can create it | Containers, agents, and mounted secrets |
+| 4 | System keyring | Stored by `auth login` | Interactive machines |
+
+`auth status` reports `credential_source` without printing the token.
+
+A command-line token can appear in shell history or process listings. Prefer
+`SATEIA_TOKEN` or `SATEIA_TOKEN_FILE` for automation. To use `--token` for one
+invocation:
 
 ```sh
-sateia auth login
+sateia --token "$TOKEN" auth status
 ```
 
-The code is valid for five minutes and can be exchanged only once. The CLI
-token is stored in macOS Keychain, Linux Secret Service, or Windows Credential
-Manager. It is never written to `config.json`.
+### Headless Linux
 
-For a non-interactive terminal, pass the one-time code and installation name:
-
-```sh
-sateia auth login --device-code ABCD-EFGH --device-name "Pengnian Mac"
-```
-
-An AI agent should run `hostname`, propose a name that identifies its current
-machine, and submit that name together with the user-provided code.
-
-Check or remove the current credential with:
-
-```sh
-sateia auth status
-sateia auth logout
-```
-
-Logout removes a local keyring credential. Environment and token-file secrets
-remain managed by their owner. Revoke a CLI token from the Sateia app when the
-token must also become invalid on the server.
-
-Automation can provide a token through `SATEIA_TOKEN`. A headless Linux server,
-container, or agent can instead read a managed or mounted secret through
-`SATEIA_TOKEN_FILE`:
-
-```sh
-export SATEIA_TOKEN_FILE=/run/secrets/sateia-token
-sateia auth status
-```
-
-Credential precedence is `SATEIA_TOKEN`, `SATEIA_TOKEN_FILE`, then the system
-credential store. Do not pass token secrets as command-line arguments, where
-they can be exposed through shell history or process inspection.
-
-Linux device-code login normally requires a Secret Service provider. When a
-headless machine has none, reserve a new private token file before exchanging
-the code:
+Linux keyring storage requires Secret Service and a user D-Bus session. On a
+headless machine without them, create a new private token file while exchanging
+the device code:
 
 ```sh
 sateia auth login \
@@ -79,15 +90,25 @@ export SATEIA_TOKEN_FILE="$HOME/.config/sateia/token"
 sateia auth status
 ```
 
-The parent directory must already exist. The CLI refuses to overwrite an
-existing path and creates the new file with mode `0600` before consuming the
-single-use code. `auth logout` does not delete environment-managed token files;
-remove them through their secret manager and revoke the server token when
-required.
+The parent directory must already exist. The CLI creates the file with mode
+`0600` and refuses to overwrite an existing path. It reserves the file before
+consuming the single-use code.
+
+### Log out or revoke
+
+```sh
+sateia auth logout
+```
+
+`auth logout` removes only the token stored in the system keyring. It does not
+delete `--token`, `SATEIA_TOKEN`, or `SATEIA_TOKEN_FILE` credentials, and it
+does not revoke any server token. Remove environment- and file-managed secrets
+at their source. Revoke a token in **Sateia app > Settings > CLI Access** when
+it must stop working everywhere.
 
 ## List records
 
-Query one page in an explicit consumed-time window:
+The CLI returns one page from an explicit consumed-time window:
 
 ```sh
 sateia record list \
@@ -97,13 +118,18 @@ sateia record list \
   --json
 ```
 
-The lower bound is inclusive and the upper bound is exclusive. Results are
-newest first. Deleted records are excluded unless `--include-deleted` is set.
-If `has_more` is true, repeat the command with exactly the same filters and add
-`--cursor` with the returned `next_cursor`. The CLI deliberately fetches one
-page at a time so automation retains control of limits and retries.
+`--consumed-from` is inclusive and `--consumed-before` is exclusive. Both are
+RFC 3339 timestamps. The limit must be from 1 to 100. Results are newest first,
+and deleted records are omitted unless `--include-deleted` is set.
+
+If `has_more` is `true`, repeat the command with exactly the same time bounds,
+`--include-deleted` choice, and limit, then pass `next_cursor` as `--cursor`.
+Cursors are opaque and bound to the complete filter set; never edit or decode
+them. Omit `--cursor` to start again from the first page.
 
 ## Create a record
+
+Creating a record writes server data:
 
 ```sh
 sateia record create \
@@ -111,110 +137,92 @@ sateia record create \
   --protein 28.5 \
   --carbohydrate 62 \
   --fat 18 \
-  --note "Pengnian lunch"
-```
-
-`--consumed-at` accepts an RFC 3339 timestamp and defaults to the current time.
-The timestamp's UTC offset is preserved as the record's local-day offset.
-
-Use `--json` for structured output containing both `mutation_id` and the created
-record:
-
-```sh
-sateia record create \
-  --energy 520 --protein 28.5 --carbohydrate 62 --fat 18 \
+  --note "Lunch" \
   --consumed-at 2026-08-07T12:30:00+08:00 \
   --json
 ```
 
-The CLI generates both `record_id` and `mutation_id`. If a request has an
-ambiguous network failure, the error prints both identifiers. Repeat the exact
-request with `--record-id` and `--mutation-id` to get the server's idempotent
-result without creating a second record.
+Energy is measured in kilocalories. Protein, carbohydrate, and fat are measured
+in grams. All four values are required non-negative decimals with at most six
+fractional digits. `--consumed-at` accepts RFC 3339 with an explicit UTC offset
+and defaults to the current time.
 
-## Response notices and updates
+The CLI generates `record_id` and `mutation_id`. If a create request has an
+ambiguous network or temporary server failure, the error prints both values.
+Retry the exact same payload with the printed `--record-id` and
+`--mutation-id`. Changing the payload while reusing `mutation_id` causes an
+idempotency conflict; generating new identifiers may create a duplicate.
 
-Machine-readable responses include a top-level `_notice` array. Each item has
-an English `UPPER_SNAKE_CASE` `code`, a `message`, and, when useful, a
-`command`. For example, `NEXT_PAGE` explains that the returned cursor should be
-used, and `UPDATE_AVAILABLE` supplies the exact `go install` command for a
-newer stable tag. Treat notices as guidance; command success is still
-determined by the process exit status.
+## Machine-readable output
 
-Server-backed JSON responses also include top-level `request_id`, copied from
-the server's `X-Request-ID` response header. Human-readable success output and
-API errors show the same value when available. Use it to correlate server logs
-and audit events; it is request metadata, not a nutrition record identifier.
+Use `--json` when another program or an AI agent consumes the result. Successful
+JSON responses include a top-level `_notice` array:
 
-After a successful command completes, the CLI checks the public GitHub tag list
-for a newer stable version. The result is cached for 24 hours so normal commands
-do not wait on GitHub every time. Network or cache failures never change the
-business command's result. Set `SATEIA_NO_UPDATE_NOTIFIER=1` when a hermetic
-environment must skip this check.
+- `NEXT_PAGE` indicates that another query page is available.
+- `UPDATE_AVAILABLE` includes the exact command for installing the latest
+  stable CLI version.
 
-## Configuration
+Server-backed responses also include `request_id` when the server provides one.
+Report it when diagnosing an error so an operator can correlate server logs and
+audit events. It is request metadata, not a record identifier or cursor.
+
+The update check runs after a successful command and is cached for 24 hours.
+Update-check failures never change the requested command's result. Set
+`SATEIA_NO_UPDATE_NOTIFIER=1` to disable the check in a network-isolated run.
+
+## Guidance for AI agents
+
+Live help is the command contract. An agent should:
+
+1. Run `sateia --help` and `sateia environment` before its first operation.
+2. Run `hostname` before device-code login and propose a stable machine name.
+3. Never print a token or include it in logs, repository files, or messages.
+   Use only the selected secret-managed environment or token file.
+4. Use explicit time bounds for reads and keep all filters unchanged across
+   cursor pages.
+5. Run `sateia auth status` before a write.
+6. Create a record only after the user requests the write. Do not invent a
+   nutrient value or replace a known consumed time with the current time.
+7. Prefer `--json` and require a zero exit status plus a decoded success
+   response before reporting success.
+8. Preserve both identifiers and the exact payload when retrying an ambiguous
+   create request.
+
+The repository also includes an agent skill at
+[`skills/use-sateia-cli/SKILL.md`](skills/use-sateia-cli/SKILL.md). Live help
+takes precedence if an installed CLI version differs from the skill.
+
+## Troubleshooting
+
+- **No credential was found:** run `sateia auth login`, supply `--token`, or set
+  `SATEIA_TOKEN` or `SATEIA_TOKEN_FILE`.
+- **The Linux credential store is unavailable:** use a managed token or
+  `auth login --token-file <new-path>`, or start Secret Service and a user D-Bus
+  session. This error does not prove that no keyring token exists.
+- **`UNAUTHENTICATED`:** run `sateia auth status`. The error explains how to
+  replace the selected argument, environment, token-file, or keyring source.
+- **`INVALID_CURSOR`:** restore the exact filters that produced the cursor, or
+  omit `--cursor` and start again. Never modify a cursor.
+- **An ambiguous create failure:** retry the exact payload with the printed
+  `--record-id` and `--mutation-id`.
+- **A server error includes `request_id`:** include that value when asking an
+  operator to inspect logs.
+
+Run `sateia environment` for the complete credential, recovery, output, and
+safe-agent guide.
+
+## Server and local configuration
 
 The server is selected in this order:
 
 1. `--server`
 2. `SATEIA_SERVER`
-3. the server saved during `auth login`
+3. the server saved by `auth login`
 4. `https://xxnian.site/sateia-server`
 
-Remote servers must use HTTPS. Plain HTTP is accepted only for loopback local
-development. `SATEIA_CONFIG_DIR` can relocate the non-secret configuration
-directory for isolated environments and tests. It also contains the non-secret
-`update-check.json` cache.
-
-Run `sateia --help` or `sateia <command> --help` for the complete command
-reference. Run `sateia environment` for credential precedence, storage, and a
-safe agent workflow.
-
-## Agent skill
-
-The repository includes a product-neutral agent skill at
-[`skills/use-sateia-cli/SKILL.md`](skills/use-sateia-cli/SKILL.md). Agents should
-use it for authentication, nutrition record queries and pagination, record
-writes, output interpretation, and idempotent failure recovery. The skill
-treats live CLI help as the authoritative command contract.
-
-## Development
-
-```sh
-make check
-make build
-```
-
-## Releases
-
-Every pull request and push to `master` runs the Linux, macOS, and Windows CI
-matrix. After a `master` push passes CI, Release Please creates or updates a
-release pull request from Conventional Commit history. Merging that release
-pull request produces another `master` CI run; only after it passes does Release
-Please create the immutable `vMAJOR.MINOR.PATCH` tag and matching GitHub
-Release.
-
-Commit prefixes determine the next version:
-
-- `fix:` produces a patch release.
-- `feat:` produces a minor release.
-- A Conventional Commit with `!` or a `BREAKING CHANGE:` footer produces a
-  major release.
-- `docs:`, `test:`, and `chore:` do not produce a release by themselves.
-
-Do not move or overwrite a released version tag. Publish a follow-up fix under
-the next patch version instead.
-
-Repository administrators must enable **Settings > Actions > General > Allow
-GitHub Actions to create and approve pull requests** so the built-in
-`GITHUB_TOKEN` can maintain the release pull request. If release pull requests
-later require their own CI checks before merge, configure a GitHub App or
-fine-grained token instead; events created by the built-in token do not start
-additional workflows.
-
-The CLI follows the contract in the Sateia API OpenAPI document. Contract JSON
-fields remain English `lower_snake_case`, and enum values remain English
-`UPPER_SNAKE_CASE`.
+Remote servers must use HTTPS. HTTP is accepted only for loopback addresses.
+`SATEIA_CONFIG_DIR` changes where the CLI stores non-secret configuration and
+the update-check cache. The token secret is never written to `config.json`.
 
 ## License
 
