@@ -8,6 +8,13 @@
   `Retry-After`, request IDs, and non-contract response bodies in both human
   and structured JSON output.
 
+## [1.4.0](https://github.com/xxnian95/sateia-cli/compare/v1.3.0...v1.4.0) (2026-08-10)
+
+
+### Features
+
+* preserve backend error details ([b410d4e](https://github.com/xxnian95/sateia-cli/commit/b410d4ef7937298226b7e3d89855c72014ce4939))
+
 ## 1.3.0 (2026-08-10)
 
 ### Features
