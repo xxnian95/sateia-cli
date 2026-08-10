@@ -48,6 +48,12 @@ retry it.
    sateia record delete --help
    ```
 
+AI agents must run the exact concrete command with `--help` immediately before
+every invocation, even when they have used it before. Repeat this before each
+pagination request and retry because installed CLI guidance may change. Prefer
+`--help --format json` to receive a stable command schema containing field
+types, required fields, cross-field rules, examples, and command risk.
+
 The one-time code is valid for five minutes and can be exchanged only once.
 The device name is metadata supplied by the CLI; it does not need to match an
 older label shown by the app.
@@ -78,7 +84,9 @@ The CLI accepts structured nutrition values; it does not inspect images or
 calculate nutrition by itself. An AI agent can interpret a meal photo,
 nutrition label, recipe, or conversation, but it should show the proposed
 record to the user before writing whenever the values are estimated or the
-request is ambiguous.
+request is ambiguous. In a record note, put the food name and quantity or
+serving first so truncated client previews remain useful. Append provenance,
+import source, and external IDs afterward.
 
 | User request | Agent workflow | CLI operation |
 | --- | --- | --- |
@@ -116,7 +124,7 @@ sateia record create \
   --protein 52 \
   --carbohydrate 68 \
   --fat 14 \
-  --note "Estimated from meal photo after user confirmation" \
+  --note "Chicken 200 g + rice 1 bowl; estimated from meal photo after user confirmation" \
   --consumed-at 2026-08-09T12:30:00+08:00 \
   --json
 ```
@@ -140,7 +148,7 @@ sateia record create \
   --protein 12 \
   --carbohydrate 54 \
   --fat 10.5 \
-  --note "1.5 servings from confirmed nutrition label" \
+  --note "Example snack, 1.5 servings; calculated from confirmed nutrition label" \
   --consumed-at 2026-08-09T15:20:00+08:00 \
   --json
 ```
@@ -179,7 +187,7 @@ sateia record update \
   --protein 48 \
   --carbohydrate 64 \
   --fat 13 \
-  --note "Corrected after user supplied the portion size" \
+  --note "Chicken and rice, corrected portion; user supplied the portion size" \
   --json
 ```
 
@@ -351,8 +359,9 @@ deleted record.
 
 ## Machine-readable output
 
-Use `--json` when another program or an AI agent consumes the result. Successful
-JSON responses include a top-level `_notice` array:
+`--json` is global. Use it when another program or an AI agent consumes the
+result. Successful JSON responses are written to stdout and include a top-level
+`_notice` array:
 
 - `NEXT_PAGE` indicates that another query page is available.
 - `UPDATE_AVAILABLE` includes the exact command for installing the latest
@@ -365,6 +374,51 @@ audit events. It is request metadata, not a record identifier or cursor.
 The update check runs after a successful command and is cached for 24 hours.
 Update-check failures never change the requested command's result. Set
 `SATEIA_NO_UPDATE_NOTIFIER=1` to disable the check in a network-isolated run.
+
+Failures in `--json` mode are written to stderr with a non-zero exit status:
+
+```json
+{
+  "ok": false,
+  "error": {
+    "type": "api",
+    "code": "VERSION_CONFLICT",
+    "message": "update record failed",
+    "hint": "Stop: review the current record and version",
+    "retryable": false,
+    "request_id": "request_xxx"
+  }
+}
+```
+
+Use `error.code`, `retryable`, `request_id`, `violations`, and `hint` instead of
+parsing the human-readable message.
+
+## Diagnostics and bundled agent skill
+
+Run the complete read-only diagnostic suite:
+
+```sh
+sateia doctor --help --format json
+sateia doctor --json
+```
+
+`doctor` checks the CLI version, local clock, selected server, credential
+source, authenticated read access, available update, and installed agent skill.
+Warnings do not make `healthy` false; required-check failures do.
+
+The exact `use-sateia-cli` skill is embedded in every CLI build:
+
+```sh
+sateia skill check --json
+sateia skill install
+sateia skill update
+```
+
+Managed installations include a hash manifest. `skill update` installs a
+missing skill or replaces an outdated, unchanged managed copy. It refuses to
+overwrite `MODIFIED`, `UNMANAGED`, or `INVALID` targets unless `--force` is
+explicitly supplied.
 
 ## Guidance for AI agents
 

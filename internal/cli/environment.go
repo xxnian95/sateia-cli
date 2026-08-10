@@ -47,15 +47,21 @@ Credential storage:
 Safe agent workflow:
   1. Run hostname and use a stable name that identifies the current machine
      whenever requesting device-code authentication.
-  2. Run "sateia record list --help" before a read. Use explicit RFC 3339
-     bounds and keep every filter unchanged when continuing with --cursor.
-  3. Run "sateia auth status" before a write.
-  4. Mutate a record only after the user requests that exact write. Preserve
+  2. Immediately before every concrete command invocation, run that exact
+     command with --help, even if it was already used in the same task. Repeat
+     this before pagination requests and retries. The installed CLI may have
+     updated field guidance and agent instructions. Prefer --format json to
+     read field types, requirements, relationships, and command risk.
+  3. For a list, use explicit RFC 3339 bounds and keep every filter unchanged
+     when continuing with --cursor.
+  4. Run "sateia auth status --help", then "sateia auth status", before a write.
+  5. Mutate a record only after the user requests that exact write. Preserve
      supplied values, and never infer a record ID or expected version.
-  5. Run the selected create, update, or delete subcommand with --help and
-     validate every required value and legal flag combination.
-  6. Use --json for machine-readable query and mutation output.
-  7. After an ambiguous network failure, retry the exact same request with all
+  6. For record create notes, put the food name and quantity or serving first,
+     because clients may show only the leading characters. Put provenance,
+     import source, and external IDs afterward.
+  7. Use --json for machine-readable query and mutation output.
+  8. After an ambiguous network failure, retry the exact same request with all
      printed identifiers. Update and delete retries must also preserve
      --expected-version. Never change a payload while reusing mutation_id.
 
@@ -63,10 +69,26 @@ Response notices and updates:
   - JSON responses include a top-level _notice list. Inspect each code and
     finish the requested operation before acting on informational notices.
   - UPDATE_AVAILABLE includes the exact go install command for the latest
-    stable GitHub tag. NEXT_PAGE explains when pagination should continue.
+    stable GitHub tag and follow_up_command="sateia skill update" so the
+    installed skill is aligned afterward. NEXT_PAGE explains pagination.
   - The public GitHub tag check runs after a successful command and is cached
     for 24 hours. Failures never change the command result.
   - Set SATEIA_NO_UPDATE_NOTIFIER=1 to disable the tag check in hermetic runs.
+
+Structured errors:
+  - --json is a global flag. Successful commands write JSON to stdout.
+  - Failures write {"ok":false,"error":...} to stderr and exit non-zero.
+  - Inspect error.code, retryable, request_id, violations, and hint instead of
+    parsing human-readable error text.
+
+Bundled skill and diagnostics:
+  - Run "sateia skill check --json" to compare the installed use-sateia-cli
+    skill with the exact bundle embedded in this CLI.
+  - "sateia skill update" installs missing bundles and updates only unchanged
+    managed files. MODIFIED or UNMANAGED targets require explicit --force.
+  - Run "sateia doctor --json" for read-only version, clock, server,
+    credential, authentication, update, and skill checks. Inspect healthy and
+    every check status; WARN does not make healthy false.
 
 Request correlation:
   - Successful server-backed commands expose the server's X-Request-ID as
@@ -79,7 +101,7 @@ Exit status is zero on success and non-zero on validation, authentication,
 network, or server errors.`
 
 func (app *application) newEnvironmentCommand() *cobra.Command {
-	return &cobra.Command{
+	command := &cobra.Command{
 		Use:   "environment",
 		Short: "Explain configuration and safe automation",
 		Long:  environmentGuide,
@@ -88,9 +110,16 @@ func (app *application) newEnvironmentCommand() *cobra.Command {
 			if app.manualTokenSet {
 				return errors.New("--token is not used by the environment command\nNext: omit --token to print guidance, or use it with auth status or a record operation")
 			}
+			if app.jsonOutput {
+				return app.writeJSON(command.Context(), struct {
+					Guide string `json:"guide"`
+				}{Guide: environmentGuide})
+			}
 			fmt.Fprintln(app.out, environmentGuide)
 			app.writeHumanNotices(command.Context())
 			return nil
 		},
 	}
+	setCommandRisk(command, riskReadOnly)
+	return command
 }

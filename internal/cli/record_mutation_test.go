@@ -72,7 +72,7 @@ func TestRecordUpdateRejectsPartialNutrientsBeforeAuthentication(t *testing.T) {
 		"--energy", "610",
 	})
 	err := command.Execute()
-	if err == nil || !strings.Contains(err.Error(), "must be supplied together") {
+	if err == nil || (!strings.Contains(err.Error(), "must be supplied together") && !strings.Contains(err.Error(), "must all be set")) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }

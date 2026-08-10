@@ -28,6 +28,7 @@ CLI token. One-off commands may provide --token; headless agents should prefer
 SATEIA_TOKEN or SATEIA_TOKEN_FILE. Run "sateia environment" for device naming,
 credential precedence, storage ownership, and recovery instructions.`,
 	}
+	setCommandRisk(command, riskNone)
 	command.AddCommand(app.newLoginCommand(), app.newStatusCommand(), app.newLogoutCommand())
 	return command
 }
@@ -53,7 +54,18 @@ across multiple devices.
 
 By default the token is stored in the operating system credential store. On a
 headless Linux machine without Secret Service, use --token-file with a new path;
-the CLI creates it with private permissions before consuming the device code.`,
+the CLI creates it with private permissions before consuming the device code.
+
+Field guidance:
+  --device-code is the current eight-character app code in ABCD-EFGH form.
+  --device-name is a stable, recognizable name for this machine, up to 100
+  characters. Run hostname before choosing it.
+  --token-file is a new, non-existing path whose parent directory already
+  exists. Omit it to use the operating system credential store.
+
+AI agents: immediately before every login attempt, run
+"sateia auth login --help" again. Installed CLI updates may change these
+instructions.`,
 		Example: `  # Interactive login
   sateia auth login
 
@@ -161,6 +173,25 @@ the CLI creates it with private permissions before consuming the device code.`,
 				}
 				return fmt.Errorf("keyring token stored but save non-secret metadata: %w\nNext: run \"sateia --server %s auth status\"; repair the configuration location before changing credentials", err, baseURL)
 			}
+			if app.jsonOutput {
+				output := struct {
+					Server           string `json:"server"`
+					DeviceName       string `json:"device_name"`
+					TokenID          string `json:"token_id"`
+					TokenExpiresAt   string `json:"token_expires_at"`
+					CredentialSource string `json:"credential_source"`
+					TokenFile        string `json:"token_file,omitempty"`
+					RequestID        string `json:"request_id"`
+				}{
+					Server: baseURL, DeviceName: deviceName, TokenID: issued.TokenID,
+					TokenExpiresAt: issued.ExpiresAt.Format(time.RFC3339), CredentialSource: credentialSource,
+					RequestID: metadata.RequestID,
+				}
+				if prepared != nil {
+					output.TokenFile = prepared.Path()
+				}
+				return app.writeJSON(command.Context(), output)
+			}
 			fmt.Fprintf(app.out, `Authentication succeeded.
 server: %s
 device_name: %s
@@ -183,21 +214,30 @@ credential_source: %s
 			return nil
 		},
 	}
-	command.Flags().StringVar(&deviceCode, "device-code", "", "one-time code displayed by the Sateia app")
-	command.Flags().StringVar(&deviceName, "device-name", "", "stable name identifying this machine (default: prompt with hostname)")
-	command.Flags().StringVar(&tokenFile, "token-file", "", "new file for the token on headless systems (created with mode 0600)")
+	setCommandRisk(command, riskLocalWrite)
+	command.Flags().StringVar(&deviceCode, "device-code", "", "current five-minute app code in ABCD-EFGH form; omit for an interactive prompt")
+	command.Flags().StringVar(&deviceName, "device-name", "", "stable recognizable name for this machine, up to 100 characters; omit for a hostname-based prompt")
+	command.Flags().StringVar(&tokenFile, "token-file", "", "new non-existing token path with an existing parent; omit to use the keyring")
 	return command
 }
 
 func (app *application) newStatusCommand() *cobra.Command {
-	return &cobra.Command{
+	command := &cobra.Command{
 		Use:   "status",
 		Short: "Verify the current token",
 		Long: `Verify the effective credential with a read-only API request.
 
 Credential precedence is --token, SATEIA_TOKEN, SATEIA_TOKEN_FILE, then the
 system credential store. This command does not reveal the token secret and
-does not write nutrition data.`,
+does not write nutrition data.
+
+Use --server only for the intended HTTPS API base URL. Use --token only with a
+non-empty one-off bearer token; prefer managed environment or file credentials
+for automation.
+
+AI agents: immediately before every status check, run
+"sateia auth status --help" again. Installed CLI updates may change these
+instructions.`,
 		Args: cobra.NoArgs,
 		RunE: func(command *cobra.Command, _ []string) error {
 			baseURL, stored, err := app.baseURL()
@@ -216,6 +256,18 @@ does not write nutrition data.`,
 			if err != nil {
 				return authenticationCheckError(err, source)
 			}
+			if app.jsonOutput {
+				output := struct {
+					Server           string `json:"server"`
+					CredentialSource string `json:"credential_source"`
+					TokenExpiresAt   string `json:"token_expires_at,omitempty"`
+					RequestID        string `json:"request_id"`
+				}{Server: baseURL, CredentialSource: source, RequestID: metadata.RequestID}
+				if source == "keyring" && stored.ExpiresAt != nil {
+					output.TokenExpiresAt = stored.ExpiresAt.Format(time.RFC3339)
+				}
+				return app.writeJSON(command.Context(), output)
+			}
 			fmt.Fprintf(app.out, "Authentication verified.\nserver: %s\ncredential_source: %s\n", baseURL, source)
 			if source == "keyring" && stored.ExpiresAt != nil {
 				fmt.Fprintf(app.out, "token_expires_at: %s\n", stored.ExpiresAt.Format(time.RFC3339))
@@ -228,17 +280,25 @@ does not write nutrition data.`,
 			return nil
 		},
 	}
+	setCommandRisk(command, riskReadOnly)
+	return command
 }
 
 func (app *application) newLogoutCommand() *cobra.Command {
-	return &cobra.Command{
+	command := &cobra.Command{
 		Use:   "logout",
 		Short: "Remove the stored CLI token",
 		Long: `Remove the token from the local operating system credential store.
 
 This does not revoke the token on the server. Revoke the CLI token in the
 Sateia app when the credential must become invalid everywhere. Environment and
-token-file credentials are managed by their owner and are not deleted.`,
+token-file credentials are managed by their owner and are not deleted. Do not
+pass --token: logout acts only on the keyring credential for the selected
+server.
+
+AI agents: immediately before every logout, run
+"sateia auth logout --help" again. Installed CLI updates may change these
+instructions.`,
 		Args: cobra.NoArgs,
 		RunE: func(command *cobra.Command, _ []string) error {
 			if app.manualTokenSet {
@@ -265,6 +325,14 @@ token-file credentials are managed by their owner and are not deleted.`,
 			if err := config.Save(stored); err != nil {
 				return fmt.Errorf("keyring credential removed but clear non-secret metadata: %w\nNext: repair the configuration location; the local keyring token is already removed, but the server token is not revoked", err)
 			}
+			if app.jsonOutput {
+				return app.writeJSON(command.Context(), struct {
+					Server           string `json:"server"`
+					CredentialSource string `json:"credential_source"`
+					LocalRemoved     bool   `json:"local_removed"`
+					ServerRevoked    bool   `json:"server_revoked"`
+				}{Server: baseURL, CredentialSource: "keyring", LocalRemoved: true, ServerRevoked: false})
+			}
 			fmt.Fprintf(app.out, `Local authentication removed.
 server: %s
 To invalidate the token on the server, revoke it in Sateia app > Settings > CLI Access.
@@ -273,6 +341,8 @@ To invalidate the token on the server, revoke it in Sateia app > Settings > CLI 
 			return nil
 		},
 	}
+	setCommandRisk(command, riskLocalDelete)
+	return command
 }
 
 func credentialStoreUnavailableError(action string, err error) error {

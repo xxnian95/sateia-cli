@@ -24,18 +24,20 @@ Quick start:
   2. Identify this machine with hostname and choose a stable device name.
   3. Run "sateia auth login" with the chosen device name and code.
   4. Run "sateia auth status" to verify the credential.
-  5. Run "sateia record list --help" for a read. Before a write, inspect
-     "sateia record create --help", "sateia record update --help", or
-     "sateia record delete --help".
+  5. Immediately before every concrete command invocation, run that exact
+     command with --help, even if you have used it before. CLI updates may
+     change field guidance and safe agent behavior. Add "--format json" for a
+     machine-readable schema with types, requirements, rules, and risk.
 
 If you already have a token, use --token for one invocation or prefer
 SATEIA_TOKEN or SATEIA_TOKEN_FILE for automation. Command-line tokens may be
 visible in shell history and process listings. On headless Linux, device-code
 login can store a new token in a private file with --token-file.
 
-Run "sateia environment" for credential precedence, secret-storage behavior,
-failure recovery, and AI-agent guidance. Use --json for machine-readable
-responses; inspect the top-level _notice list for pagination and update hints.`
+Run "sateia doctor --help" and then "sateia doctor --json" to diagnose the CLI,
+server, credential, authentication, update, and bundled skill. Run "sateia
+environment" for detailed safe-agent guidance. Use --json for machine-readable
+success and error responses; inspect the top-level _notice list on success.`
 
 type application struct {
 	version        string
@@ -45,6 +47,8 @@ type application struct {
 	server         string
 	manualToken    string
 	manualTokenSet bool
+	helpFormat     helpFormatValue
+	jsonOutput     bool
 	store          credential.Store
 	updateChecker  updateChecker
 }
@@ -65,6 +69,7 @@ func newWithDependencies(version string, in io.Reader, out, errOut io.Writer, st
 		errOut:        errOut,
 		store:         store,
 		updateChecker: checker,
+		helpFormat:    "text",
 	}
 	root := &cobra.Command{
 		Use:   "sateia",
@@ -81,24 +86,38 @@ func newWithDependencies(version string, in io.Reader, out, errOut io.Writer, st
   sateia record list --help
   sateia record create --help
   sateia record update --help
-  sateia record delete --help`,
+  sateia record delete --help
+
+  # Inspect a machine-readable command contract
+  sateia record create --help --format json
+
+  # Diagnose the complete local and server setup
+  sateia doctor --json`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		Version:       version,
 	}
+	setCommandRisk(root, riskNone)
 	root.SetIn(in)
 	root.SetOut(out)
 	root.SetErr(errOut)
-	root.PersistentPreRunE = func(_ *cobra.Command, _ []string) error {
+	root.PersistentPreRunE = func(command *cobra.Command, _ []string) error {
+		markStructuredErrorPreference(root, command)
+		if app.helpFormat != "text" {
+			return errors.New("--format applies only to help output; use it together with --help")
+		}
 		app.manualTokenSet = root.PersistentFlags().Changed("token")
 		if app.manualTokenSet && strings.TrimSpace(app.manualToken) == "" {
 			return errors.New("--token must not be empty\nNext: supply a non-empty token, or omit --token and use SATEIA_TOKEN, SATEIA_TOKEN_FILE, or the system keyring")
 		}
 		return nil
 	}
-	root.PersistentFlags().StringVar(&app.server, "server", "", "Sateia API base URL (or SATEIA_SERVER)")
-	root.PersistentFlags().StringVar(&app.manualToken, "token", "", "token for this invocation (highest precedence; may be exposed by the shell or process list)")
-	root.AddCommand(app.newAuthCommand(), app.newRecordCommand(), app.newGoalCommand(), app.newEnvironmentCommand())
+	root.PersistentFlags().StringVar(&app.server, "server", "", "HTTPS Sateia API base URL; omit for SATEIA_SERVER, saved config, or the production default")
+	root.PersistentFlags().StringVar(&app.manualToken, "token", "", "non-empty bearer token for this invocation; highest precedence and may be exposed by the shell or process list")
+	root.PersistentFlags().Var(&app.helpFormat, "format", "help output format: text or json; applies only with --help")
+	root.PersistentFlags().BoolVar(&app.jsonOutput, "json", false, "print command results and errors as JSON; preferred for agents")
+	root.AddCommand(app.newAuthCommand(), app.newRecordCommand(), app.newGoalCommand(), app.newEnvironmentCommand(), app.newSkillCommand(), app.newDoctorCommand())
+	configureHelpContract(root, &app.helpFormat)
 	return root
 }
 

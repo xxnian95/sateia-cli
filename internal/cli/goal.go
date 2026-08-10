@@ -14,7 +14,6 @@ type goalSetOptions struct {
 	protein      string
 	carbohydrate string
 	fat          string
-	jsonOutput   bool
 }
 
 func (app *application) newGoalCommand() *cobra.Command {
@@ -27,16 +26,23 @@ Dates use yyyy-MM-dd and carry no time or time-zone semantics. A custom goal
 overrides the app's Settings goals for that date. Deleting it restores the
 Settings fallback.`,
 	}
+	setCommandRisk(command, riskNone)
 	command.AddCommand(app.newGoalGetCommand(), app.newGoalSetCommand(), app.newGoalDeleteCommand())
 	return command
 }
 
 func (app *application) newGoalGetCommand() *cobra.Command {
-	jsonOutput := false
 	command := &cobra.Command{
 		Use:   "get DATE",
 		Short: "Get the custom goal for a calendar date",
-		Args:  cobra.ExactArgs(1),
+		Long: `Get the custom goal for one exact calendar date.
+
+DATE must be a valid yyyy-MM-dd value, such as 2026-08-09. It has no time or
+time-zone semantics. Use --json for machine-readable output.
+
+AI agents: immediately before every lookup, run "sateia goal get --help"
+again. Installed CLI updates may change these instructions.`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(command *cobra.Command, args []string) error {
 			date, err := canonicalGoalDate(args[0])
 			if err != nil {
@@ -50,10 +56,10 @@ func (app *application) newGoalGetCommand() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("get daily goal failed: %w", err)
 			}
-			return app.printDailyGoal(command, goal, metadata, jsonOutput)
+			return app.printDailyGoal(command, goal, metadata, app.jsonOutput)
 		},
 	}
-	command.Flags().BoolVar(&jsonOutput, "json", false, "print the request ID and daily goal as JSON")
+	setCommandRisk(command, riskReadOnly)
 	return command
 }
 
@@ -62,7 +68,17 @@ func (app *application) newGoalSetCommand() *cobra.Command {
 	command := &cobra.Command{
 		Use:   "set DATE",
 		Short: "Create or replace the custom goal for a calendar date",
-		Args:  cobra.ExactArgs(1),
+		Long: `Create or replace the custom goal for one exact calendar date.
+
+DATE must be a valid yyyy-MM-dd value, such as 2026-08-09, with no time or
+time-zone semantics. Supply all four goals as plain non-negative decimals with
+at most six fractional digits. Energy is in kilocalories; protein,
+carbohydrate, and fat are in grams. Do not include unit suffixes.
+
+AI agents: immediately before every set operation, run
+"sateia goal set --help" again. Installed CLI updates may change these
+instructions.`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(command *cobra.Command, args []string) error {
 			date, err := canonicalGoalDate(args[0])
 			if err != nil {
@@ -85,15 +101,15 @@ func (app *application) newGoalSetCommand() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("set daily goal failed: %w", err)
 			}
-			return app.printDailyGoal(command, goal, metadata, options.jsonOutput)
+			return app.printDailyGoal(command, goal, metadata, app.jsonOutput)
 		},
 	}
+	setCommandRisk(command, riskWrite)
 	flags := command.Flags()
-	flags.StringVar(&options.energy, "energy", "", "energy goal in kilocalories (required)")
-	flags.StringVar(&options.protein, "protein", "", "protein goal in grams (required)")
-	flags.StringVar(&options.carbohydrate, "carbohydrate", "", "carbohydrate goal in grams (required)")
-	flags.StringVar(&options.fat, "fat", "", "fat goal in grams (required)")
-	flags.BoolVar(&options.jsonOutput, "json", false, "print the request ID and daily goal as JSON")
+	flags.StringVar(&options.energy, "energy", "", "kilocalorie goal as a non-negative decimal without a unit suffix (required)")
+	flags.StringVar(&options.protein, "protein", "", "protein gram goal as a non-negative decimal without a unit suffix (required)")
+	flags.StringVar(&options.carbohydrate, "carbohydrate", "", "carbohydrate gram goal as a non-negative decimal without a unit suffix (required)")
+	flags.StringVar(&options.fat, "fat", "", "fat gram goal as a non-negative decimal without a unit suffix (required)")
 	for _, name := range []string{"energy", "protein", "carbohydrate", "fat"} {
 		_ = command.MarkFlagRequired(name)
 	}
@@ -101,11 +117,19 @@ func (app *application) newGoalSetCommand() *cobra.Command {
 }
 
 func (app *application) newGoalDeleteCommand() *cobra.Command {
-	jsonOutput := false
 	command := &cobra.Command{
 		Use:   "delete DATE",
 		Short: "Delete the custom goal and restore the Settings fallback",
-		Args:  cobra.ExactArgs(1),
+		Long: `Delete the custom goal for one exact calendar date.
+
+DATE must be a valid yyyy-MM-dd value, such as 2026-08-09, with no time or
+time-zone semantics. Deletion restores the app Settings fallback for that
+date. Use --json for machine-readable output.
+
+AI agents: immediately before every delete operation, run
+"sateia goal delete --help" again. Installed CLI updates may change these
+instructions.`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(command *cobra.Command, args []string) error {
 			date, err := canonicalGoalDate(args[0])
 			if err != nil {
@@ -119,7 +143,7 @@ func (app *application) newGoalDeleteCommand() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("delete daily goal failed: %w", err)
 			}
-			if jsonOutput {
+			if app.jsonOutput {
 				return app.writeJSON(command.Context(), struct {
 					RequestID string `json:"request_id"`
 					GoalDate  string `json:"goal_date"`
@@ -133,7 +157,7 @@ func (app *application) newGoalDeleteCommand() *cobra.Command {
 			return nil
 		},
 	}
-	command.Flags().BoolVar(&jsonOutput, "json", false, "print the request ID and deletion result as JSON")
+	setCommandRisk(command, riskWrite)
 	return command
 }
 

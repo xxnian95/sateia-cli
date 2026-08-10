@@ -21,7 +21,6 @@ type updateOptions struct {
 	note            string
 	clearNote       bool
 	consumedAt      string
-	jsonOutput      bool
 }
 
 type updateSelection struct {
@@ -37,7 +36,6 @@ type deleteOptions struct {
 	recordID        string
 	expectedVersion int64
 	mutationID      string
-	jsonOutput      bool
 }
 
 func (app *application) newRecordUpdateCommand() *cobra.Command {
@@ -56,7 +54,23 @@ and offset together. Use --note to replace a note or --clear-note to store null.
 The CLI generates mutation_id. After an ambiguous network or temporary server
 failure, retry the exact same payload with the printed mutation ID and expected
 version. If any field changes, generate a new mutation ID. A version conflict
-requires reviewing the current record before issuing a new update.`,
+requires reviewing the current record before issuing a new update.
+
+Field guidance:
+  --record-id is the exact UUID returned by a trusted read, and
+  --expected-version is that record's current positive integer version.
+  Nutrient values are total kilocalories or grams as plain non-negative
+  decimals. Supply all four together or omit all four.
+  --note stores the exact string, including an empty string; --clear-note
+  stores null. For a user-facing note, keep the food name and quantity first
+  and append provenance or external IDs afterward.
+  --consumed-at is the replacement consumption time in RFC 3339 form with its
+  original UTC offset. Omit unchanged fields.
+  Omit --mutation-id for a new update; reuse it only for an exact retry.
+
+AI agents: immediately before every update attempt, run
+"sateia record update --help" again, including before a retry. Installed CLI
+updates may change these instructions.`,
 		Example: `  sateia record update \
     --record-id 014b2680-df5b-4c8d-97ef-abde0a9746d6 \
     --expected-version 1 \
@@ -96,7 +110,7 @@ requires reviewing the current record before issuing a new update.`,
 			if err != nil {
 				return recordMutationErrorWithGuidance("update", err, recordID, request.MutationID, request.ExpectedVersion)
 			}
-			if options.jsonOutput {
+			if app.jsonOutput {
 				output := struct {
 					MutationID string              `json:"mutation_id"`
 					RequestID  string              `json:"request_id"`
@@ -119,21 +133,23 @@ consumed_at: %s
 			return nil
 		},
 	}
+	setCommandRisk(command, riskWrite)
 	flags := command.Flags()
-	flags.StringVar(&options.recordID, "record-id", "", "UUID of the record to update (required)")
-	flags.Int64Var(&options.expectedVersion, "expected-version", 0, "current record version required for optimistic concurrency (required)")
-	flags.StringVar(&options.mutationID, "mutation-id", "", "UUID to reuse only when retrying the exact same update")
-	flags.StringVar(&options.energy, "energy", "", "replacement energy in kilocalories; requires all nutrient flags")
-	flags.StringVar(&options.protein, "protein", "", "replacement protein in grams; requires all nutrient flags")
-	flags.StringVar(&options.carbohydrate, "carbohydrate", "", "replacement carbohydrate in grams; requires all nutrient flags")
-	flags.StringVar(&options.fat, "fat", "", "replacement fat in grams; requires all nutrient flags")
-	flags.StringVar(&options.note, "note", "", "replacement note, including an explicitly empty string")
+	flags.StringVar(&options.recordID, "record-id", "", "exact record UUID from a trusted read (required)")
+	flags.Int64Var(&options.expectedVersion, "expected-version", 0, "current positive integer version from the same trusted read (required)")
+	flags.StringVar(&options.mutationID, "mutation-id", "", "mutation UUID from a failed update; omit initially and reuse only for the exact unchanged retry")
+	flags.StringVar(&options.energy, "energy", "", "total replacement kilocalories as a non-negative decimal; requires all nutrient flags")
+	flags.StringVar(&options.protein, "protein", "", "total replacement protein grams as a non-negative decimal; requires all nutrient flags")
+	flags.StringVar(&options.carbohydrate, "carbohydrate", "", "total replacement carbohydrate grams as a non-negative decimal; requires all nutrient flags")
+	flags.StringVar(&options.fat, "fat", "", "total replacement fat grams as a non-negative decimal; requires all nutrient flags")
+	flags.StringVar(&options.note, "note", "", "exact replacement note up to 500 characters; food name and quantity should come first")
 	flags.BoolVar(&options.clearNote, "clear-note", false, "replace the note with null; mutually exclusive with --note")
-	flags.StringVar(&options.consumedAt, "consumed-at", "", "replacement RFC 3339 timestamp with an explicit UTC offset")
-	flags.BoolVar(&options.jsonOutput, "json", false, "print the mutation ID, request ID, and updated record as JSON")
+	flags.StringVar(&options.consumedAt, "consumed-at", "", "actual replacement consumption time as RFC 3339 with its original UTC offset")
 	for _, name := range []string{"record-id", "expected-version"} {
 		_ = command.MarkFlagRequired(name)
 	}
+	command.MarkFlagsRequiredTogether("energy", "protein", "carbohydrate", "fat")
+	command.MarkFlagsMutuallyExclusive("note", "clear-note")
 	return command
 }
 
@@ -218,7 +234,17 @@ func (app *application) newRecordDeleteCommand() *cobra.Command {
 reviewed. The CLI generates mutation_id. If the result is ambiguous, retry the
 same record ID, expected version, and mutation ID. Replaying the same successful
 deletion returns its original tombstone without incrementing the version again.
-The CLI cannot restore a deleted record.`,
+The CLI cannot restore a deleted record.
+
+Field guidance:
+  --record-id is the exact UUID returned by a trusted read.
+  --expected-version is that record's current positive integer version.
+  Omit --mutation-id initially; supply the exact UUID printed by a failed
+  delete only when retrying the same record and version.
+
+AI agents: immediately before every delete attempt, run
+"sateia record delete --help" again, including before a retry. Installed CLI
+updates may change these instructions.`,
 		Example: `  sateia record delete \
     --record-id 014b2680-df5b-4c8d-97ef-abde0a9746d6 \
     --expected-version 2 \
@@ -252,7 +278,7 @@ The CLI cannot restore a deleted record.`,
 			if err != nil {
 				return recordMutationErrorWithGuidance("delete", err, recordID, mutationID, options.expectedVersion)
 			}
-			if options.jsonOutput {
+			if app.jsonOutput {
 				output := struct {
 					MutationID string                `json:"mutation_id"`
 					RequestID  string                `json:"request_id"`
@@ -274,11 +300,11 @@ deleted_at: %s
 			return nil
 		},
 	}
+	setCommandRisk(command, riskSoftDelete)
 	flags := command.Flags()
-	flags.StringVar(&options.recordID, "record-id", "", "UUID of the record to soft-delete (required)")
-	flags.Int64Var(&options.expectedVersion, "expected-version", 0, "current record version required for optimistic concurrency (required)")
-	flags.StringVar(&options.mutationID, "mutation-id", "", "UUID to reuse only when retrying this exact deletion")
-	flags.BoolVar(&options.jsonOutput, "json", false, "print the mutation ID, request ID, and deletion tombstone as JSON")
+	flags.StringVar(&options.recordID, "record-id", "", "exact record UUID from a trusted read (required)")
+	flags.Int64Var(&options.expectedVersion, "expected-version", 0, "current positive integer version from the same trusted read (required)")
+	flags.StringVar(&options.mutationID, "mutation-id", "", "mutation UUID from a failed delete; omit initially and reuse only for the exact unchanged retry")
 	for _, name := range []string{"record-id", "expected-version"} {
 		_ = command.MarkFlagRequired(name)
 	}
