@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- Preserve and surface complete backend error context, unknown error fields,
+  `Retry-After`, request IDs, and non-contract response bodies in both human
+  and structured JSON output.
+
 ## 1.3.0 (2026-08-10)
 
 ### Features

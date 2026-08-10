@@ -324,8 +324,11 @@ CLI 会在成功执行命令后检查更新，并缓存结果 24 小时。更新
 禁用检查。
 
 `--json` 模式下，失败响应写入 stderr 并返回非零退出状态。错误信封包含稳定的
-`error.code`、`retryable`、`request_id`、`violations` 和 `hint`；不要解析供人阅读的
-错误消息。
+`error.code`、`retryable`、`retry_after`、`request_id`、`violations`、`context`
+和 `hint`；不要解析供人阅读的错误消息。CLI 还会在 `backend_error` 中完整保留服务端
+错误对象；如果代理或上游返回不符合 API 契约的响应体，则通过 `response_body` 展示，
+而不是丢弃。响应体超过 2 MiB 的防御性上限时会设置 `response_body_truncated`，不会
+静默伪装成完整内容。
 
 ## 诊断与内置 Agent Skill
 

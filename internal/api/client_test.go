@@ -253,8 +253,9 @@ func TestAPIErrorIncludesResponseRequestID(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		writer.Header().Set("Content-Type", "application/json")
 		writer.Header().Set("X-Request-ID", "request-failure")
+		writer.Header().Set("Retry-After", "45")
 		writer.WriteHeader(http.StatusServiceUnavailable)
-		_, _ = writer.Write([]byte(`{"error":{"code":"DATABASE_UNAVAILABLE","message":"Database unavailable","retryable":true}}`))
+		_, _ = writer.Write([]byte(`{"error":{"code":"DATABASE_UNAVAILABLE","message":"Database unavailable","retryable":true,"context":{"region":"primary"},"support_reference":"db-42"}}`))
 	}))
 	defer server.Close()
 
@@ -270,8 +271,52 @@ func TestAPIErrorIncludesResponseRequestID(t *testing.T) {
 	if !ok {
 		t.Fatalf("unexpected error type %T", err)
 	}
-	if apiErr.RequestID != "request-failure" || !strings.Contains(apiErr.Error(), "request_id=request-failure") {
+	if apiErr.RequestID != "request-failure" || apiErr.RetryAfter != "45" || !strings.Contains(apiErr.Error(), "request_id=request-failure") {
 		t.Fatalf("unexpected API error: %#v, %v", apiErr, apiErr)
+	}
+	if string(apiErr.Context["region"]) != `"primary"` || string(apiErr.UnknownFields["support_reference"]) != `"db-42"` {
+		t.Fatalf("missing backend fields: %#v", apiErr)
+	}
+	for _, required := range []string{`context={"region":"primary"}`, `additional_fields={"support_reference":"db-42"}`, "retry_after=45"} {
+		if !strings.Contains(apiErr.Error(), required) {
+			t.Errorf("API error does not contain %q: %v", required, apiErr)
+		}
+	}
+}
+
+func TestDecodeAPIErrorPreservesNonContractResponseBody(t *testing.T) {
+	t.Parallel()
+	err := decodeAPIError(http.StatusBadGateway, strings.NewReader("upstream database gateway unavailable"))
+	apiErr, ok := err.(*APIError)
+	if !ok || apiErr.ResponseBody != "upstream database gateway unavailable" {
+		t.Fatalf("unexpected API error: %#v", err)
+	}
+	if !strings.Contains(apiErr.Error(), `response_body="upstream database gateway unavailable"`) {
+		t.Fatalf("response body was not surfaced: %v", apiErr)
+	}
+}
+
+func TestDecodeAPIErrorSurfacesNonObjectErrorValue(t *testing.T) {
+	t.Parallel()
+	err := decodeAPIError(http.StatusBadGateway, strings.NewReader(`{"error":"upstream unavailable"}`))
+	apiErr, ok := err.(*APIError)
+	if !ok || string(apiErr.BackendError) != `"upstream unavailable"` {
+		t.Fatalf("unexpected API error: %#v", err)
+	}
+	if !strings.Contains(apiErr.Error(), `backend_error="upstream unavailable"`) {
+		t.Fatalf("backend error was not surfaced: %v", apiErr)
+	}
+}
+
+func TestDecodeAPIErrorReportsResponseBodyLimit(t *testing.T) {
+	t.Parallel()
+	err := decodeAPIError(http.StatusBadGateway, strings.NewReader(strings.Repeat("x", maxErrorResponseBodySize+10)))
+	apiErr, ok := err.(*APIError)
+	if !ok || !apiErr.BodyTruncated || len(apiErr.ResponseBody) != maxErrorResponseBodySize {
+		t.Fatalf("unexpected API error: %#v", err)
+	}
+	if !strings.Contains(apiErr.Error(), "response_body_truncated=true") {
+		t.Fatalf("truncation was not surfaced: %v", apiErr)
 	}
 }
 
