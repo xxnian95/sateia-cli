@@ -25,8 +25,11 @@ func main() {
 	if info, ok := debug.ReadBuildInfo(); ok {
 		moduleVersion = info.Main.Version
 	}
-	if err := cli.New(resolvedVersion(version, moduleVersion), os.Stdin, os.Stdout, os.Stderr).ExecuteContext(ctx); err != nil {
-		fmt.Fprintln(os.Stderr, "Error:", err)
+	command := cli.New(resolvedVersion(version, moduleVersion), os.Stdin, os.Stdout, os.Stderr)
+	if err := command.ExecuteContext(ctx); err != nil {
+		if writeErr := cli.WriteError(command, os.Args[1:], err, os.Stderr); writeErr != nil {
+			fmt.Fprintln(os.Stderr, "Error: write command error:", writeErr)
+		}
 		os.Exit(1)
 	}
 }
