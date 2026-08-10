@@ -45,6 +45,11 @@ sateia --version
    sateia record delete --help
    ```
 
+AI agent 每次调用具体命令前，都必须立即重新执行该命令的 `--help`，即使之前已经
+调用过同一命令。分页请求和重试前也应重复查看，因为已安装 CLI 的指导可能已更新。
+优先使用 `--help --format json` 获取稳定的命令 schema，其中包含字段类型、必填项、
+跨字段规则、示例和命令风险。
+
 一次性代码的有效期为五分钟，并且只能兑换一次。设备名称由 CLI 作为 token
 元数据提交，不需要与 App 以前显示的标签一致。
 
@@ -52,7 +57,8 @@ sateia --version
 
 CLI 只接收结构化营养数据，不会自行识别图片或计算营养值。AI agent 可以分析
 食物照片、营养标签、菜谱或对话，但只要数据包含估算，或者用户意图不明确，写入
-前就应向用户展示拟创建的记录并获得确认。
+前就应向用户展示拟创建的记录并获得确认。备注应先写食物名称和数量或份量，使
+客户端截断展示时仍保留最有用的信息；数据来源、导入来源和外部 ID 应放在后面。
 
 | 用户请求 | Agent 操作 | CLI 命令 |
 | --- | --- | --- |
@@ -88,7 +94,7 @@ sateia record create \
   --protein 52 \
   --carbohydrate 68 \
   --fat 14 \
-  --note "根据食物照片估算，已由用户确认" \
+  --note "鸡肉 200 克 + 米饭 1 碗；根据食物照片估算，已由用户确认" \
   --consumed-at 2026-08-09T12:30:00+08:00 \
   --json
 ```
@@ -110,7 +116,7 @@ sateia record create \
   --protein 12 \
   --carbohydrate 54 \
   --fat 10.5 \
-  --note "营养标签数据，用户确认摄入 1.5 份" \
+  --note "示例零食 1.5 份；根据已确认的营养标签计算" \
   --consumed-at 2026-08-09T15:20:00+08:00 \
   --json
 ```
@@ -145,7 +151,7 @@ sateia record update \
   --protein 48 \
   --carbohydrate 64 \
   --fat 13 \
-  --note "用户补充份量后修正" \
+  --note "鸡肉饭，修正份量；用户补充份量后修正" \
   --json
 ```
 
@@ -304,8 +310,8 @@ sateia record delete \
 
 ## 机器可读输出
 
-当其他程序或 AI agent 需要消费结果时，请使用 `--json`。成功的 JSON 响应包含
-顶层 `_notice` 数组：
+`--json` 是全局参数。当其他程序或 AI agent 需要消费结果时，请使用它。成功的
+JSON 响应写入 stdout，并包含顶层 `_notice` 数组：
 
 - `NEXT_PAGE` 表示还有下一页查询结果。
 - `UPDATE_AVAILABLE` 包含安装最新稳定版 CLI 的完整命令。
@@ -316,6 +322,34 @@ sateia record delete \
 CLI 会在成功执行命令后检查更新，并缓存结果 24 小时。更新检查失败不会改变
 当前命令的结果。在隔离网络环境中，可以设置 `SATEIA_NO_UPDATE_NOTIFIER=1`
 禁用检查。
+
+`--json` 模式下，失败响应写入 stderr 并返回非零退出状态。错误信封包含稳定的
+`error.code`、`retryable`、`request_id`、`violations` 和 `hint`；不要解析供人阅读的
+错误消息。
+
+## 诊断与内置 Agent Skill
+
+运行完整的只读诊断：
+
+```sh
+sateia doctor --help --format json
+sateia doctor --json
+```
+
+`doctor` 检查 CLI 版本、本地时钟、服务器、凭证来源、认证读取、可用更新以及已安装
+的 agent skill。警告不会令 `healthy` 变为 `false`，必要检查失败则会。
+
+每个 CLI 构建都内嵌完全对应的 `use-sateia-cli` skill：
+
+```sh
+sateia skill check --json
+sateia skill install
+sateia skill update
+```
+
+由 CLI 管理的安装包含哈希清单。`skill update` 可以安装缺失的 skill，也可以更新未被
+修改的旧版本；遇到 `MODIFIED`、`UNMANAGED` 或 `INVALID` 时默认拒绝覆盖，只有明确
+传入 `--force` 才会继续。
 
 ## AI agent 使用规则
 
