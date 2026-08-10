@@ -20,14 +20,19 @@ type errorEnvelope struct {
 }
 
 type structuredCLIError struct {
-	Type       string               `json:"type"`
-	Code       string               `json:"code"`
-	Message    string               `json:"message"`
-	Hint       string               `json:"hint,omitempty"`
-	Retryable  bool                 `json:"retryable"`
-	StatusCode int                  `json:"status_code,omitempty"`
-	RequestID  string               `json:"request_id,omitempty"`
-	Violations []api.FieldViolation `json:"violations,omitempty"`
+	Type          string                     `json:"type"`
+	Code          string                     `json:"code"`
+	Message       string                     `json:"message"`
+	Hint          string                     `json:"hint,omitempty"`
+	Retryable     bool                       `json:"retryable"`
+	StatusCode    int                        `json:"status_code,omitempty"`
+	RetryAfter    string                     `json:"retry_after,omitempty"`
+	RequestID     string                     `json:"request_id,omitempty"`
+	Violations    []api.FieldViolation       `json:"violations,omitempty"`
+	Context       map[string]json.RawMessage `json:"context,omitempty"`
+	BackendError  json.RawMessage            `json:"backend_error,omitempty"`
+	ResponseBody  string                     `json:"response_body,omitempty"`
+	BodyTruncated bool                       `json:"response_body_truncated,omitempty"`
 }
 
 // WriteError preserves the CLI's stderr/non-zero contract while making --json failures parseable.
@@ -87,8 +92,13 @@ func classifyStructuredError(err error) structuredCLIError {
 		}
 		result.Retryable = apiErr.Retryable
 		result.StatusCode = apiErr.StatusCode
+		result.RetryAfter = apiErr.RetryAfter
 		result.RequestID = apiErr.RequestID
 		result.Violations = apiErr.Violations
+		result.Context = apiErr.Context
+		result.BackendError = apiErr.BackendError
+		result.ResponseBody = apiErr.ResponseBody
+		result.BodyTruncated = apiErr.BodyTruncated
 		return result
 	}
 	if errors.Is(err, context.Canceled) {

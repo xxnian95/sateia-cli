@@ -208,8 +208,12 @@ and decoded tombstone before reporting success.
 ## Recover from failures
 
 With global `--json`, parse the non-zero stderr envelope. Use `error.code`,
-`retryable`, `request_id`, `violations`, and `hint`; do not scrape the human
-message. Successful JSON remains on stdout.
+`retryable`, `retry_after`, `request_id`, `violations`, `context`, and `hint`;
+do not scrape the human message. Preserve unknown `context` keys and inspect
+`backend_error` when the normalized fields are insufficient. A non-contract
+proxy or upstream response is available as `response_body`; when
+`response_body_truncated` is true, report that the defensive 2 MiB limit was
+reached. Successful JSON remains on stdout.
 
 - Validation error: correct the stated input and submit a new request. Never
   reuse a `mutation_id` with a different payload.
@@ -230,6 +234,9 @@ message. Successful JSON remains on stdout.
   input; recover the original request instead of guessing.
 - `VERSION_CONFLICT`: stop. Read and review the current record version before
   issuing a new mutation with a new mutation ID. Never guess the version.
+- `QUOTA_EXCEEDED`: report `quota_type`, `daily_limit`, `used`, `remaining`,
+  `resets_at`, and `seconds_until_reset` from `context`. Do not retry before the
+  stated reset unless the user changes the server-side quota.
 
 ## Common Rationalizations
 

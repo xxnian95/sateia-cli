@@ -17,7 +17,10 @@ import (
 
 const clientType = "CLI"
 
-const maxResponseRequestIDLength = 128
+const (
+	maxResponseRequestIDLength = 128
+	maxErrorResponseBodySize   = 2 << 20
+)
 
 type Client struct {
 	baseURL    string
@@ -128,12 +131,18 @@ type NutritionRecordPage struct {
 }
 
 type APIError struct {
-	StatusCode int
-	Code       string
-	Message    string
-	Retryable  bool
-	Violations []FieldViolation
-	RequestID  string
+	StatusCode    int
+	Code          string
+	Message       string
+	Retryable     bool
+	Violations    []FieldViolation
+	Context       map[string]json.RawMessage
+	BackendError  json.RawMessage
+	UnknownFields map[string]json.RawMessage
+	ResponseBody  string
+	BodyTruncated bool
+	RetryAfter    string
+	RequestID     string
 }
 
 type FieldViolation struct {
@@ -151,8 +160,26 @@ func (err *APIError) Error() string {
 	for _, violation := range err.Violations {
 		message += fmt.Sprintf("; %s %s", violation.Field, violation.Reason)
 	}
+	if len(err.Context) > 0 {
+		message += "; context=" + compactJSON(err.Context)
+	}
+	if len(err.UnknownFields) > 0 {
+		message += "; additional_fields=" + compactJSON(err.UnknownFields)
+	}
+	if len(err.BackendError) > 0 && err.Code == "" && err.Message == "" && len(err.UnknownFields) == 0 {
+		message += "; backend_error=" + string(err.BackendError)
+	}
+	if err.ResponseBody != "" {
+		message += "; response_body=" + strconv.Quote(err.ResponseBody)
+	}
+	if err.BodyTruncated {
+		message += "; response_body_truncated=true"
+	}
 	if err.Retryable {
 		message += "; retryable=true"
+	}
+	if err.RetryAfter != "" {
+		message += "; retry_after=" + err.RetryAfter
 	}
 	if err.RequestID != "" {
 		message += "; request_id=" + err.RequestID
@@ -401,17 +428,18 @@ func (client *Client) do(ctx context.Context, method, path string, body any, aut
 	}
 	defer response.Body.Close()
 	metadata := ResponseMetadata{RequestID: responseRequestID(response.Header.Get("X-Request-ID"))}
-	limited := io.LimitReader(response.Body, 2<<20)
 	if response.StatusCode != expectedStatus {
-		err := decodeAPIError(response.StatusCode, limited)
+		err := decodeAPIError(response.StatusCode, response.Body)
 		if apiErr, ok := err.(*APIError); ok {
 			apiErr.RequestID = metadata.RequestID
+			apiErr.RetryAfter = strings.TrimSpace(response.Header.Get("Retry-After"))
 		}
 		return metadata, err
 	}
 	if output == nil {
 		return metadata, nil
 	}
+	limited := io.LimitReader(response.Body, 2<<20)
 	if err := json.NewDecoder(limited).Decode(output); err != nil {
 		return metadata, responseMetadataError(metadata, fmt.Errorf("decode response: %w", err))
 	}
@@ -443,22 +471,62 @@ func responseRequestID(value string) string {
 }
 
 func decodeAPIError(statusCode int, body io.Reader) error {
-	var envelope struct {
-		Error struct {
-			Code            string           `json:"code"`
-			Message         string           `json:"message"`
-			Retryable       bool             `json:"retryable"`
-			FieldViolations []FieldViolation `json:"field_violations"`
-		} `json:"error"`
+	payload, readErr := io.ReadAll(io.LimitReader(body, maxErrorResponseBodySize+1))
+	if readErr != nil {
+		return &APIError{StatusCode: statusCode, ResponseBody: "unable to read response body: " + readErr.Error()}
 	}
-	if err := json.NewDecoder(body).Decode(&envelope); err != nil {
+	bodyTruncated := len(payload) > maxErrorResponseBodySize
+	if bodyTruncated {
+		payload = payload[:maxErrorResponseBodySize]
+	}
+	payload = bytes.TrimSpace(payload)
+	var envelope struct {
+		Error json.RawMessage `json:"error"`
+	}
+	if len(payload) == 0 {
 		return &APIError{StatusCode: statusCode}
 	}
-	return &APIError{
-		StatusCode: statusCode,
-		Code:       envelope.Error.Code,
-		Message:    envelope.Error.Message,
-		Retryable:  envelope.Error.Retryable,
-		Violations: envelope.Error.FieldViolations,
+	if err := json.Unmarshal(payload, &envelope); err != nil || len(envelope.Error) == 0 {
+		// Non-contract responses are still caller-visible because proxies and upstreams may carry useful diagnostics.
+		return &APIError{StatusCode: statusCode, ResponseBody: string(payload), BodyTruncated: bodyTruncated}
 	}
+	var errorBody struct {
+		Code            string                     `json:"code"`
+		Message         string                     `json:"message"`
+		Retryable       bool                       `json:"retryable"`
+		FieldViolations []FieldViolation           `json:"field_violations"`
+		Context         map[string]json.RawMessage `json:"context"`
+	}
+	if err := json.Unmarshal(envelope.Error, &errorBody); err != nil {
+		return &APIError{StatusCode: statusCode, BackendError: cloneRawMessage(envelope.Error), BodyTruncated: bodyTruncated}
+	}
+	unknownFields := map[string]json.RawMessage{}
+	if err := json.Unmarshal(envelope.Error, &unknownFields); err == nil {
+		for _, key := range []string{"code", "message", "retryable", "field_violations", "context"} {
+			delete(unknownFields, key)
+		}
+	}
+	return &APIError{
+		StatusCode:    statusCode,
+		Code:          errorBody.Code,
+		Message:       errorBody.Message,
+		Retryable:     errorBody.Retryable,
+		Violations:    errorBody.FieldViolations,
+		Context:       errorBody.Context,
+		BackendError:  cloneRawMessage(envelope.Error),
+		UnknownFields: unknownFields,
+		BodyTruncated: bodyTruncated,
+	}
+}
+
+func compactJSON(value any) string {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return "<unavailable>"
+	}
+	return string(encoded)
+}
+
+func cloneRawMessage(value json.RawMessage) json.RawMessage {
+	return append(json.RawMessage(nil), value...)
 }

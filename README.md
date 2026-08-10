@@ -386,13 +386,30 @@ Failures in `--json` mode are written to stderr with a non-zero exit status:
     "message": "update record failed",
     "hint": "Stop: review the current record and version",
     "retryable": false,
-    "request_id": "request_xxx"
+    "request_id": "request_xxx",
+    "context": {
+      "expected_version": 2,
+      "current_version": 3
+    },
+    "backend_error": {
+      "code": "VERSION_CONFLICT",
+      "message": "expected_version 2 does not match current version 3",
+      "retryable": false,
+      "context": {
+        "expected_version": 2,
+        "current_version": 3
+      }
+    }
   }
 }
 ```
 
-Use `error.code`, `retryable`, `request_id`, `violations`, and `hint` instead of
-parsing the human-readable message.
+Use `error.code`, `retryable`, `retry_after`, `request_id`, `violations`,
+`context`, and `hint` instead of parsing the human-readable message. The CLI
+also preserves the server's complete error object in `backend_error`. If a
+proxy or upstream returns a non-contract body, the CLI surfaces it as
+`response_body` instead of discarding it. Bodies over the defensive 2 MiB
+limit set `response_body_truncated` rather than silently appearing complete.
 
 ## Diagnostics and bundled agent skill
 
