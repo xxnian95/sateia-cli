@@ -24,7 +24,6 @@ type createOptions struct {
 	consumedAt   string
 	recordID     string
 	mutationID   string
-	jsonOutput   bool
 }
 
 type listOptions struct {
@@ -33,7 +32,6 @@ type listOptions struct {
 	includeDeleted bool
 	cursor         string
 	limit          int
-	jsonOutput     bool
 }
 
 func (app *application) newRecordCommand() *cobra.Command {
@@ -44,9 +42,11 @@ func (app *application) newRecordCommand() *cobra.Command {
 
 Use "sateia record list --help" for read-only queries. Create, update, and
 delete are write operations; verify authentication and inspect the selected
-subcommand's help before invoking it. Use --json when another program or an AI
-agent will consume the result.`,
+subcommand's live help immediately before every invocation, even if it was
+used earlier. CLI updates may change field guidance and safe agent behavior.
+Use --json when another program or an AI agent will consume the result.`,
 	}
+	setCommandRisk(command, riskNone)
 	command.AddCommand(
 		app.newRecordListCommand(),
 		app.newRecordCreateCommand(),
@@ -71,7 +71,18 @@ The CLI does not paginate automatically. For the next page, repeat the command
 with the same filters and pass the returned next_cursor as --cursor. A cursor is
 opaque and is valid only with the same consumed-time bounds, deletion filter,
 and limit. Omit --cursor for the first page. JSON output includes top-level
-request_id for correlation with server logs and audit events.`,
+request_id for correlation with server logs and audit events.
+
+Field guidance:
+  --consumed-from is the inclusive start and --consumed-before is the exclusive
+  end. Use RFC 3339 timestamps with the intended UTC offset.
+  --limit is an integer from 1 to 100. Omit --include-deleted unless deleted
+  records are required. Omit --cursor on page one; on later pages copy the
+  exact next_cursor and keep every other filter unchanged.
+
+AI agents: immediately before every page request, run
+"sateia record list --help" again, including when continuing pagination.
+Installed CLI updates may change these instructions.`,
 		Example: `  sateia record list \
     --consumed-from 2026-08-01T00:00:00+08:00 \
     --consumed-before 2026-08-08T00:00:00+08:00 \
@@ -112,7 +123,7 @@ request_id for correlation with server logs and audit events.`,
 			if err != nil {
 				return listErrorWithGuidance(err)
 			}
-			if options.jsonOutput {
+			if app.jsonOutput {
 				output := struct {
 					RequestID  string                `json:"request_id"`
 					Records    []api.NutritionRecord `json:"records"`
@@ -132,13 +143,13 @@ request_id for correlation with server logs and audit events.`,
 			return nil
 		},
 	}
+	setCommandRisk(command, riskReadOnly)
 	flags := command.Flags()
-	flags.StringVar(&options.consumedFrom, "consumed-from", "", "inclusive RFC 3339 lower bound, for example 2026-08-01T00:00:00+08:00 (required)")
-	flags.StringVar(&options.consumedBefore, "consumed-before", "", "exclusive RFC 3339 upper bound, for example 2026-08-08T00:00:00+08:00 (required)")
-	flags.IntVar(&options.limit, "limit", 0, "maximum records in this page, from 1 to 100 (required)")
-	flags.BoolVar(&options.includeDeleted, "include-deleted", false, "include soft-deleted records")
-	flags.StringVar(&options.cursor, "cursor", "", "opaque next_cursor from the previous page, with the same filters")
-	flags.BoolVar(&options.jsonOutput, "json", false, "print request ID, records, and pagination metadata as JSON")
+	flags.StringVar(&options.consumedFrom, "consumed-from", "", "inclusive RFC 3339 start with UTC offset, for example 2026-08-01T00:00:00+08:00 (required)")
+	flags.StringVar(&options.consumedBefore, "consumed-before", "", "exclusive RFC 3339 end with UTC offset, later than --consumed-from (required)")
+	flags.IntVar(&options.limit, "limit", 0, "maximum records in one page; integer from 1 to 100 (required)")
+	flags.BoolVar(&options.includeDeleted, "include-deleted", false, "include soft-deleted records; omit for active records only")
+	flags.StringVar(&options.cursor, "cursor", "", "exact opaque next_cursor from the prior page; omit on page one and keep all filters unchanged")
 	for _, name := range []string{"consumed-from", "consumed-before", "limit"} {
 		_ = command.MarkFlagRequired(name)
 	}
@@ -216,13 +227,29 @@ The CLI generates record_id and mutation_id. After an ambiguous network
 failure, retry the exact same payload with both identifiers printed in the
 error. Using new identifiers may create a duplicate record. JSON output
 includes top-level request_id for correlation with server logs and audit
-events.`,
+events.
+
+Field guidance:
+  --energy is total energy in kilocalories; --protein, --carbohydrate, and
+  --fat are total grams. Supply plain non-negative decimals without units.
+  --note should start with the food name and quantity or serving, because
+  clients may display only its leading characters. Append provenance, import
+  source, and external IDs afterward. Example: "Chicken rice, 1 bowl;
+  estimated from meal photo; external_id=meal-123".
+  --consumed-at is the actual consumption time with its original UTC offset;
+  omit it only when the current time is correct.
+  Omit --record-id and --mutation-id for a new record. Supply the exact UUIDs
+  printed by a failed attempt only when retrying that unchanged create.
+
+AI agents: immediately before every create attempt, run
+"sateia record create --help" again, including before a retry. Installed CLI
+updates may change these instructions.`,
 		Example: `  sateia record create \
     --energy 520 \
     --protein 28.5 \
     --carbohydrate 62 \
     --fat 18 \
-    --note "Pengnian lunch" \
+    --note "Chicken rice, 1 bowl; entered by Pengnian" \
     --consumed-at 2026-08-07T12:30:00+08:00 \
     --json`,
 		Args: cobra.NoArgs,
@@ -247,7 +274,7 @@ events.`,
 			if err != nil {
 				return createErrorWithGuidance(err, request)
 			}
-			if options.jsonOutput {
+			if app.jsonOutput {
 				output := struct {
 					MutationID string              `json:"mutation_id"`
 					RequestID  string              `json:"request_id"`
@@ -270,16 +297,16 @@ consumed_at: %s
 			return nil
 		},
 	}
+	setCommandRisk(command, riskWrite)
 	flags := command.Flags()
-	flags.StringVar(&options.energy, "energy", "", "energy in kilocalories (required)")
-	flags.StringVar(&options.protein, "protein", "", "protein in grams (required)")
-	flags.StringVar(&options.carbohydrate, "carbohydrate", "", "carbohydrate in grams (required)")
-	flags.StringVar(&options.fat, "fat", "", "fat in grams (required)")
-	flags.StringVar(&options.note, "note", "", "optional note (maximum 500 characters)")
-	flags.StringVar(&options.consumedAt, "consumed-at", "", "RFC 3339 timestamp with offset (default: now)")
-	flags.StringVar(&options.recordID, "record-id", "", "UUID to reuse when retrying a create")
-	flags.StringVar(&options.mutationID, "mutation-id", "", "UUID to reuse when retrying a create")
-	flags.BoolVar(&options.jsonOutput, "json", false, "print the request ID and created record as JSON")
+	flags.StringVar(&options.energy, "energy", "", "total kilocalories as a non-negative decimal without a unit suffix (required)")
+	flags.StringVar(&options.protein, "protein", "", "total protein grams as a non-negative decimal without a unit suffix (required)")
+	flags.StringVar(&options.carbohydrate, "carbohydrate", "", "total carbohydrate grams as a non-negative decimal without a unit suffix (required)")
+	flags.StringVar(&options.fat, "fat", "", "total fat grams as a non-negative decimal without a unit suffix (required)")
+	flags.StringVar(&options.note, "note", "", "up to 500 characters: food name and quantity first, then provenance, import source, and external IDs")
+	flags.StringVar(&options.consumedAt, "consumed-at", "", "actual consumption time as RFC 3339 with UTC offset; omit to use now")
+	flags.StringVar(&options.recordID, "record-id", "", "record UUID from a failed create; omit for new data and reuse only for an unchanged retry")
+	flags.StringVar(&options.mutationID, "mutation-id", "", "mutation UUID from a failed create; omit initially and reuse only for the exact unchanged retry")
 	for _, name := range []string{"energy", "protein", "carbohydrate", "fat"} {
 		_ = command.MarkFlagRequired(name)
 	}

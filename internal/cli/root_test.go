@@ -95,6 +95,8 @@ func TestHelpTeachesCompleteAgentWorkflow(t *testing.T) {
 			args: []string{"--help"},
 			required: []string{
 				"Quick start:",
+				"Immediately before every concrete command invocation",
+				"even if you have used it before",
 				"Settings > CLI Access",
 				"If you already have a token, use --token",
 				"--token string",
@@ -114,6 +116,17 @@ func TestHelpTeachesCompleteAgentWorkflow(t *testing.T) {
 				"sateia auth login --device-code ABCD-EFGH",
 				"--token-file",
 				"never printed",
+				"Field guidance:",
+				"new, non-existing path",
+				"sateia auth login --help",
+			},
+		},
+		{
+			name: "auth status",
+			args: []string{"auth", "status", "--help"},
+			required: []string{
+				"non-empty one-off bearer token",
+				"sateia auth status --help",
 			},
 		},
 		{
@@ -126,6 +139,10 @@ func TestHelpTeachesCompleteAgentWorkflow(t *testing.T) {
 				"--energy string",
 				"(required)",
 				"--json",
+				"food name and quantity or serving",
+				"provenance, import source, and external IDs afterward",
+				"omit for new data",
+				"sateia record create --help",
 			},
 		},
 		{
@@ -139,6 +156,8 @@ func TestHelpTeachesCompleteAgentWorkflow(t *testing.T) {
 				"same filters",
 				"top-level request_id",
 				"--json",
+				"before every page request",
+				"omit on page one",
 			},
 		},
 		{
@@ -151,6 +170,8 @@ func TestHelpTeachesCompleteAgentWorkflow(t *testing.T) {
 				"ambiguous network",
 				"new mutation ID",
 				"--json",
+				"food name and quantity first",
+				"sateia record update --help",
 			},
 		},
 		{
@@ -162,6 +183,36 @@ func TestHelpTeachesCompleteAgentWorkflow(t *testing.T) {
 				"same record ID, expected version, and mutation ID",
 				"cannot restore",
 				"--json",
+				"positive integer version",
+				"sateia record delete --help",
+			},
+		},
+		{
+			name: "goal get",
+			args: []string{"goal", "get", "--help"},
+			required: []string{
+				"DATE must be a valid yyyy-MM-dd value",
+				"sateia goal get --help",
+				"preferred for agents",
+			},
+		},
+		{
+			name: "goal set",
+			args: []string{"goal", "set", "--help"},
+			required: []string{
+				"DATE must be a valid yyyy-MM-dd value",
+				"non-negative decimals",
+				"without a unit suffix",
+				"sateia goal set --help",
+			},
+		},
+		{
+			name: "goal delete",
+			args: []string{"goal", "delete", "--help"},
+			required: []string{
+				"DATE must be a valid yyyy-MM-dd value",
+				"restores the app Settings fallback",
+				"sateia goal delete --help",
 			},
 		},
 	}
@@ -197,6 +248,10 @@ func TestEnvironmentCommandTeachesCredentialSafetyAndRetry(t *testing.T) {
 		"Precedence: --token, SATEIA_TOKEN, SATEIA_TOKEN_FILE, then the system keyring",
 		"SATEIA_TOKEN_FILE",
 		"current machine",
+		"Immediately before every concrete command invocation",
+		"already used in the same task",
+		"food name and quantity or serving first",
+		"provenance, import source, and external IDs afterward",
 		"never the token secret",
 		"removes only a keyring credential",
 		"Update and delete retries must also preserve --expected-version",
@@ -603,9 +658,10 @@ func TestJSONResponseIncludesUpdateInNoticeListAfterCommand(t *testing.T) {
 	}
 	var decoded struct {
 		Notices []struct {
-			Code    string `json:"code"`
-			Message string `json:"message"`
-			Command string `json:"command"`
+			Code            string `json:"code"`
+			Message         string `json:"message"`
+			Command         string `json:"command"`
+			FollowUpCommand string `json:"follow_up_command"`
 		} `json:"_notice"`
 	}
 	if err := json.Unmarshal(output.Bytes(), &decoded); err != nil {
@@ -616,6 +672,9 @@ func TestJSONResponseIncludesUpdateInNoticeListAfterCommand(t *testing.T) {
 	}
 	if decoded.Notices[0].Command != "go install github.com/xxnian95/sateia-cli/cmd/sateia@v1.1.0" {
 		t.Fatalf("unexpected update command: %#v", decoded.Notices[0])
+	}
+	if decoded.Notices[0].FollowUpCommand != "sateia skill update" {
+		t.Fatalf("unexpected skill follow-up command: %#v", decoded.Notices[0])
 	}
 }
 

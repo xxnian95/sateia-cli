@@ -17,9 +17,10 @@ type updateChecker interface {
 }
 
 type notice struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
-	Command string `json:"command,omitempty"`
+	Code            string `json:"code"`
+	Message         string `json:"message"`
+	Command         string `json:"command,omitempty"`
+	FollowUpCommand string `json:"follow_up_command,omitempty"`
 }
 
 func (app *application) notices(ctx context.Context) []notice {
@@ -31,9 +32,10 @@ func (app *application) notices(ctx context.Context) []notice {
 		return []notice{}
 	}
 	return []notice{{
-		Code:    "UPDATE_AVAILABLE",
-		Message: fmt.Sprintf("Sateia CLI %s is available; current version is %s.", available.LatestVersion, available.CurrentVersion),
-		Command: updateCommandPrefix + available.LatestVersion,
+		Code:            "UPDATE_AVAILABLE",
+		Message:         fmt.Sprintf("Sateia CLI %s is available; current version is %s. Update the bundled agent skill after installing the CLI.", available.LatestVersion, available.CurrentVersion),
+		Command:         updateCommandPrefix + available.LatestVersion,
+		FollowUpCommand: "sateia skill update",
 	}}
 }
 
@@ -73,6 +75,9 @@ func (app *application) writeHumanNotices(ctx context.Context) {
 		fmt.Fprintf(app.out, "- [%s] %s\n", item.Code, item.Message)
 		if item.Command != "" {
 			fmt.Fprintf(app.out, "  Run: %s\n", item.Command)
+		}
+		if item.FollowUpCommand != "" {
+			fmt.Fprintf(app.out, "  Then: %s\n", item.FollowUpCommand)
 		}
 	}
 }
