@@ -1,6 +1,6 @@
 ---
 name: use-sateia-cli
-description: Use the public Sateia CLI to authenticate, query, create, update, and delete server-side nutrition records safely. Use when a user or agent needs to install or discover the sateia command, identify the current machine for device-code authentication, supply a token with --token, SATEIA_TOKEN, or SATEIA_TOKEN_FILE, read or mutate energy and macronutrient data, interpret CLI output, paginate queries, or retry an ambiguous record write without duplication.
+description: Use the public Sateia CLI to diagnose its environment, synchronize its bundled agent skill, authenticate, and safely query, create, update, or delete server-side nutrition records. Use when a user or agent needs to discover the sateia command, consume machine-readable help or errors, run doctor, check or install the matching skill, identify the current machine for device-code authentication, select a credential source, read or mutate energy and macronutrient data, paginate queries, or retry an ambiguous record write without duplication.
 ---
 
 # Use Sateia CLI
@@ -9,6 +9,39 @@ description: Use the public Sateia CLI to authenticate, query, create, update, a
 
 Use the CLI's live help as the command contract. Protect credentials and preserve
 the record and mutation identifiers across ambiguous retries.
+
+## Always refresh command guidance
+
+Immediately before every concrete `sateia` invocation, run that exact command
+with `--help --format json`. Do this every time, even when the same command was
+already used in the current task or is familiar from earlier work. Repeat it
+before each pagination request and retry. Inspect `risk`, every field's type and
+required state, and `rules` such as `ALL_OR_NONE` or `MUTUALLY_EXCLUSIVE`. If an
+older installed CLI does not support JSON help, fall back to its text `--help`.
+Never substitute this skill, remembered syntax, or an earlier help result for
+the fresh help output.
+
+Examples:
+
+```sh
+sateia record create --help --format json
+sateia record create ...
+
+sateia record list --help --format json
+sateia record list ...
+```
+
+## Diagnose and align the installation
+
+1. Run `sateia doctor --help --format json`, then `sateia doctor --json` before
+   troubleshooting setup or authentication. Inspect `healthy` and every check;
+   a `WARN` is informational, while `FAIL` makes `healthy` false.
+2. Run `sateia skill check --help --format json`, then `sateia skill check
+   --json` when CLI and skill guidance may differ.
+3. Use `sateia skill update` only when updating the local skill is in scope. It
+   automatically installs a missing skill and updates an unchanged managed
+   copy. Stop on `MODIFIED`, `UNMANAGED`, or `INVALID`; do not add `--force`
+   unless the user explicitly authorizes overwriting those skill files.
 
 ## When to Use
 
@@ -75,7 +108,8 @@ the record and mutation identifiers across ambiguous retries.
 Use a read before considering a write when the user's request can be answered
 from existing records.
 
-1. Run `sateia record list --help` and follow the live flag contract.
+1. Run `sateia record list --help --format json` immediately before this page
+   request and follow the live flag contract.
 2. Choose an explicit consumed-time window. `--consumed-from` is inclusive and
    `--consumed-before` is exclusive; both are RFC 3339 timestamps.
 3. Set `--limit` from 1 to 100. Deleted records are excluded unless the user
@@ -93,7 +127,8 @@ sateia record list \
 The CLI returns only one page. If the user asked for all matching records and
 `has_more` is true, repeat the command with the exact same time bounds,
 `--include-deleted` choice, and limit, adding `--cursor` with the returned
-`next_cursor`. Treat cursors as opaque pagination values: do not modify or
+`next_cursor`. Run `sateia record list --help --format json` again immediately
+before each next-page request. Treat cursors as opaque pagination values: do not modify or
 decode them. Stop when `has_more` is false. Never invent a time window when the
 user's intended bounds are ambiguous.
 
@@ -101,13 +136,19 @@ user's intended bounds are ambiguous.
 
 Only write when the user explicitly requests a nutrition record mutation.
 
-1. Run `sateia record create --help`.
+1. Run `sateia record create --help --format json` immediately before the create attempt.
 2. Collect all four required amounts: energy in kilocalories, and protein,
    carbohydrate, and fat in grams. Use non-negative decimal strings, not values
    containing unit suffixes.
 3. Preserve the user's consumption time. When supplied, use RFC 3339 with its
    original UTC offset. Do not silently replace a known meal time with now.
-4. Prefer `--json` so the response includes both `mutation_id` and the record.
+4. Write `--note` for leading-character usability: start with the food name,
+   then quantity or serving. Append provenance, import source, and external IDs
+   afterward. Clients may display only the beginning of the note, so do not
+   lead with phrases such as `Imported from`, `Estimated from`, or an external
+   ID. Example: `Chicken rice, 1 bowl; estimated from meal photo;
+   external_id=meal-123`.
+5. Prefer `--json` so the response includes both `mutation_id` and the record.
 
 ```sh
 sateia record create \
@@ -115,7 +156,7 @@ sateia record create \
   --protein 28.5 \
   --carbohydrate 62 \
   --fat 18 \
-  --note "Pengnian lunch" \
+  --note "Chicken rice, 1 bowl; entered by Pengnian" \
   --consumed-at 2026-08-07T12:30:00+08:00 \
   --json
 ```
@@ -126,8 +167,8 @@ success response.
 
 ## Update a nutrition record
 
-1. Run `sateia record update --help` and identify the exact record and its
-   current version from a trusted read result.
+1. Run `sateia record update --help --format json` immediately before the update attempt and
+   identify the exact record and its current version from a trusted read result.
 2. Change only fields requested by the user. If any nutrient changes, supply
    all four nutrient flags because the complete nutrient map is replaced.
 3. Use `--note ""` only for an explicit empty string and `--clear-note` only
@@ -150,8 +191,9 @@ fresh read and user intent review before submitting a new mutation.
 
 ## Delete a nutrition record
 
-Run `sateia record delete --help`. Delete only the exact record the user named
-or unambiguously selected, and use its reviewed current version.
+Run `sateia record delete --help --format json` immediately before the delete attempt. Delete
+only the exact record the user named or unambiguously selected, and use its
+reviewed current version.
 
 ```sh
 sateia record delete \
@@ -164,6 +206,10 @@ Deletion is a soft delete, but the CLI cannot restore it. Require a zero exit
 and decoded tombstone before reporting success.
 
 ## Recover from failures
+
+With global `--json`, parse the non-zero stderr envelope. Use `error.code`,
+`retryable`, `request_id`, `violations`, and `hint`; do not scrape the human
+message. Successful JSON remains on stdout.
 
 - Validation error: correct the stated input and submit a new request. Never
   reuse a `mutation_id` with a different payload.
@@ -178,7 +224,8 @@ and decoded tombstone before reporting success.
 - Ambiguous network or retryable server failure after a record request: reuse
   every identifier printed by the CLI and repeat the exact same payload.
   Update and delete retries must preserve `record_id`, `expected_version`, and
-  `mutation_id`. Never generate a new mutation ID for that retry.
+  `mutation_id`. Never generate a new mutation ID for that retry. Run that
+  concrete command's `--help` again immediately before issuing the retry.
 - `IDEMPOTENCY_CONFLICT`: stop. The mutation identifier was reused with different
   input; recover the original request instead of guessing.
 - `VERSION_CONFLICT`: stop. Read and review the current record version before
@@ -236,9 +283,11 @@ and decoded tombstone before reporting success.
   complete.
 - Inspect the top-level `_notice` list after a successful JSON command.
   `NEXT_PAGE` describes pagination, while `UPDATE_AVAILABLE` contains an exact
-  update command. Finish the user's current operation before acting on an
-  informational notice. Report the update briefly; do not install it unless the
-  user asked for an update.
+  CLI update command followed by `follow_up_command` for aligning the bundled
+  skill. Finish the user's current operation before acting on an informational
+  notice. Report the update briefly; do not install it unless the user asked
+  for an update. When authorized, run the CLI update first and the follow-up
+  skill update second.
 - Set `SATEIA_NO_UPDATE_NOTIFIER=1` only when a hermetic run must avoid the
   cached public GitHub tag check.
 - For writes, report the returned `record_id`, `mutation_id`, and version. Also
