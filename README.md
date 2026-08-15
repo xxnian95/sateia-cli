@@ -1,11 +1,55 @@
+<p align="center">
+  <img src="docs/assets/sateia-app-icon.png" width="160" alt="Sateia app icon">
+</p>
+
 # Sateia CLI
 
-English | [简体中文](README.zh-CN.md)
+<p align="center">
+  The command-line companion for Sateia nutrition tracking.
+</p>
 
-`sateia` reads and mutates nutrition records on a Sateia server. Records
-changed by the CLI synchronize to the Sateia app. The CLI supports interactive
-login, managed tokens for automation, one-page queries, machine-readable
-output, optimistic concurrency, and idempotent mutation retries.
+<p align="center">
+  English | <a href="README.zh-CN.md">简体中文</a>
+</p>
+
+## About Sateia
+
+Sateia is an iPhone nutrition log for dietary energy, protein, carbohydrate,
+and fat. The app keeps its working data on the device and provides daily
+progress, seven-day trends, record history, and manual entry. With permission,
+it can read supported nutrition data from Apple Health and write Sateia records
+back to Apple Health.
+
+The Sateia app can also download records created through the managed service,
+API, or this CLI. This makes the CLI useful for terminal workflows, personal
+automation, and AI agents while the app remains the place to review progress
+and manage synchronization.
+
+Server synchronization is one-way for nutrition data: the app downloads
+server and CLI records, but never uploads manual entries, local nutrition
+history, or Apple Health samples. Apple Health access is optional and remains
+under iOS privacy controls. Sateia is not a medical device and does not provide
+diagnosis, treatment, or professional dietary advice.
+
+[App overview](https://xxnian.site/sateia-server/app) ·
+[Support](https://xxnian.site/sateia-server/support) ·
+[Privacy](https://xxnian.site/sateia-server/privacy) ·
+[Health data practices](https://xxnian.site/sateia-server/health-data-practices) ·
+[Terms](https://xxnian.site/sateia-server/terms)
+
+## What the CLI provides
+
+`sateia` reads and changes nutrition records on a Sateia server. Records
+created or changed by the CLI synchronize to the Sateia app and may be written
+to Apple Health by the app after authorization.
+
+| Capability | Commands and behavior |
+| --- | --- |
+| Authentication | Pair through a five-minute, single-use code from the app; store credentials in the system keyring or a managed token file |
+| Nutrition records | List, create, update, and soft-delete energy, protein, carbohydrate, and fat records |
+| Daily goals | Get, set, and delete date-specific nutrition goals |
+| Automation | Use stable JSON output, environment-managed credentials, optimistic concurrency, and idempotent mutation retries |
+| AI agents | Inspect machine-readable help, run read-only diagnostics, and install the bundled `use-sateia-cli` skill |
 
 ## Install
 

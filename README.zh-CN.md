@@ -1,10 +1,49 @@
+<p align="center">
+  <img src="docs/assets/sateia-app-icon.png" width="160" alt="Sateia App 图标">
+</p>
+
 # Sateia CLI（简体中文）
 
-[English](README.md) | 简体中文
+<p align="center">
+  Sateia 营养记录的命令行工具。
+</p>
 
-`sateia` 用于读取和修改 Sateia 服务端的营养记录。CLI 修改的数据会同步到
-Sateia App。CLI 支持交互式登录、自动化场景的托管 token、单页查询、机器可读
-输出、乐观并发控制，以及写操作失败后的幂等重试。
+<p align="center">
+  <a href="README.md">English</a> | 简体中文
+</p>
+
+## 关于 Sateia
+
+Sateia 是一款用于记录膳食能量、蛋白质、碳水化合物和脂肪的 iPhone 营养日志
+App。它将工作数据保存在设备上，支持查看每日进度、七日趋势和记录历史，
+也可以手动添加记录。获得用户授权后，App 可以读取 Apple Health 中支持的营养
+数据，并将 Sateia 记录写入 Apple Health。
+
+Sateia App 还可以下载通过托管服务、API 或 CLI 创建的记录。因此，你可以用 CLI
+完成终端操作、个人自动化和 AI agent 工作流，再回到 App 查看进度并管理同步。
+
+营养数据的服务端同步是单向的：App 会下载服务端和 CLI 记录，但不会上传手动
+条目、本地营养历史或 Apple Health 样本。Apple Health 访问是可选功能，并由 iOS 隐私
+设置控制。Sateia 不是医疗器械，也不提供诊断、治疗或专业膳食建议。
+
+[应用介绍](https://xxnian.site/sateia-server/zh-cn/app) ·
+[支持](https://xxnian.site/sateia-server/zh-cn/support) ·
+[隐私政策](https://xxnian.site/sateia-server/zh-cn/privacy) ·
+[健康数据使用说明](https://xxnian.site/sateia-server/zh-cn/health-data-practices) ·
+[使用条款](https://xxnian.site/sateia-server/zh-cn/terms)
+
+## CLI 能力
+
+`sateia` 用于读取和修改 Sateia 服务端的营养记录。CLI 创建或修改的记录会同步到
+Sateia App；获得授权后，App 还可将这些记录写入 Apple Health。
+
+| 能力 | 命令与行为 |
+| --- | --- |
+| 身份认证 | 使用 App 生成的五分钟有效、仅可使用一次的代码完成配对；凭证可保存到系统凭证库或托管 token 文件 |
+| 营养记录 | 查询、创建、更新和软删除膳食能量、蛋白质、碳水化合物和脂肪记录 |
+| 每日目标 | 获取、设置和删除指定日期的营养目标 |
+| 自动化 | 使用稳定的 JSON 输出、环境托管凭证、乐观并发控制和写操作的幂等重试 |
+| AI agent | 读取机器可读帮助、运行只读诊断，并安装内置的 `use-sateia-cli` skill |
 
 ## 安装
 
@@ -39,6 +78,7 @@ sateia --version
 5. 查看要执行的操作：
 
    ```sh
+   sateia goal --help
    sateia record list --help
    sateia record create --help
    sateia record update --help
@@ -52,6 +92,26 @@ AI agent 每次调用具体命令前，都必须立即重新执行该命令的 `
 
 一次性代码的有效期为五分钟，并且只能兑换一次。设备名称由 CLI 作为 token
 元数据提交，不需要与 App 以前显示的标签一致。
+
+## 每日目标
+
+每日目标使用 `yyyy-MM-dd` 格式的自然日作为键，日期不包含时间或时区语义。
+指定日期的自定义目标优先于 App 设置中的目标；删除自定义目标后，该日期会恢复
+使用 App 设置。
+
+```sh
+sateia goal set 2026-08-09 \
+  --energy 2200 \
+  --protein 140 \
+  --carbohydrate 240 \
+  --fat 70
+
+sateia goal get 2026-08-09 --json
+sateia goal delete 2026-08-09
+```
+
+`goal set` 必须同时提供四个营养参数。所有数值都必须是非负十进制数，最多包含
+六位小数。
 
 ## 实用场景
 
