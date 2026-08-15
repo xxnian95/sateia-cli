@@ -234,9 +234,9 @@ reached. Successful JSON remains on stdout.
   input; recover the original request instead of guessing.
 - `VERSION_CONFLICT`: stop. Read and review the current record version before
   issuing a new mutation with a new mutation ID. Never guess the version.
-- `QUOTA_EXCEEDED`: report `quota_type`, `daily_limit`, `used`, `remaining`,
-  `resets_at`, and `seconds_until_reset` from `context`. Do not retry before the
-  stated reset unless the user changes the server-side quota.
+- `QUOTA_EXCEEDED`: report `quota_type`, `quota_period`, `limit`, `used`,
+  `remaining`, `resets_at`, and `seconds_until_reset` from `context`. Do not
+  retry before the stated reset unless the user changes the server-side quota.
 
 ## Common Rationalizations
 
