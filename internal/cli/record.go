@@ -15,6 +15,8 @@ import (
 
 var decimalPattern = regexp.MustCompile(`^(0|[1-9][0-9]*)(\.[0-9]{1,6})?$`)
 
+const maxNoteLength = 5000
+
 type createOptions struct {
 	energy       string
 	protein      string
@@ -303,7 +305,7 @@ consumed_at: %s
 	flags.StringVar(&options.protein, "protein", "", "total protein grams as a non-negative decimal without a unit suffix (required)")
 	flags.StringVar(&options.carbohydrate, "carbohydrate", "", "total carbohydrate grams as a non-negative decimal without a unit suffix (required)")
 	flags.StringVar(&options.fat, "fat", "", "total fat grams as a non-negative decimal without a unit suffix (required)")
-	flags.StringVar(&options.note, "note", "", "up to 500 characters: food name and quantity first, then provenance, import source, and external IDs")
+	flags.StringVar(&options.note, "note", "", "up to 5,000 characters: food name and quantity first, then provenance, import source, and external IDs")
 	flags.StringVar(&options.consumedAt, "consumed-at", "", "actual consumption time as RFC 3339 with UTC offset; omit to use now")
 	flags.StringVar(&options.recordID, "record-id", "", "record UUID from a failed create; omit for new data and reuse only for an unchanged retry")
 	flags.StringVar(&options.mutationID, "mutation-id", "", "mutation UUID from a failed create; omit initially and reuse only for the exact unchanged retry")
@@ -347,8 +349,8 @@ func buildCreateRequest(options createOptions, now time.Time) (api.CreateRecordR
 			return api.CreateRecordRequest{}, fmt.Errorf("--%s must be a non-negative decimal with at most six fractional digits", name)
 		}
 	}
-	if len([]rune(options.note)) > 500 {
-		return api.CreateRecordRequest{}, errors.New("--note must contain at most 500 characters")
+	if len([]rune(options.note)) > maxNoteLength {
+		return api.CreateRecordRequest{}, errors.New("--note must contain at most 5,000 characters")
 	}
 
 	consumedAt := now

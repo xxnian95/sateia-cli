@@ -115,6 +115,15 @@ func TestDailyGoalMethodsUseCalendarDateResource(t *testing.T) {
 		if request.Header.Get("Authorization") != "Bearer secret" {
 			t.Fatalf("unexpected authorization %q", request.Header.Get("Authorization"))
 		}
+		if request.Method == http.MethodPut {
+			var input DailyGoalInput
+			if err := json.NewDecoder(request.Body).Decode(&input); err != nil {
+				t.Fatal(err)
+			}
+			if input.Note == nil || *input.Note != "Training day" {
+				t.Fatalf("unexpected daily goal note: %#v", input.Note)
+			}
+		}
 		methods <- request.Method
 		writer.Header().Set("X-Request-ID", "request-goal")
 		if request.Method == http.MethodDelete {
@@ -122,7 +131,7 @@ func TestDailyGoalMethodsUseCalendarDateResource(t *testing.T) {
 			return
 		}
 		writer.Header().Set("Content-Type", "application/json")
-		_, _ = writer.Write([]byte(`{"daily_goal":{"goal_date":"2026-08-09","nutrients":{"energy":"2200","protein":"140","carbohydrate":"240","fat":"70"}}}`))
+		_, _ = writer.Write([]byte(`{"daily_goal":{"goal_date":"2026-08-09","nutrients":{"energy":"2200","protein":"140","carbohydrate":"240","fat":"70"},"note":"Training day"}}`))
 	}))
 	defer server.Close()
 
@@ -130,10 +139,15 @@ func TestDailyGoalMethodsUseCalendarDateResource(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := client.GetDailyGoal(context.Background(), "2026-08-09"); err != nil {
+	goal, _, err := client.GetDailyGoal(context.Background(), "2026-08-09")
+	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := client.PutDailyGoal(context.Background(), "2026-08-09", DailyGoalInput{Nutrients: map[string]string{"energy": "2200", "protein": "140", "carbohydrate": "240", "fat": "70"}}); err != nil {
+	if goal.Note == nil || *goal.Note != "Training day" {
+		t.Fatalf("unexpected response note: %#v", goal.Note)
+	}
+	note := "Training day"
+	if _, _, err := client.PutDailyGoal(context.Background(), "2026-08-09", DailyGoalInput{Nutrients: map[string]string{"energy": "2200", "protein": "140", "carbohydrate": "240", "fat": "70"}, Note: &note}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := client.DeleteDailyGoal(context.Background(), "2026-08-09"); err != nil {

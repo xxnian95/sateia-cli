@@ -110,10 +110,12 @@ type NutritionRecord struct {
 type DailyGoal struct {
 	GoalDate  string            `json:"goal_date"`
 	Nutrients map[string]string `json:"nutrients"`
+	Note      *string           `json:"note"`
 }
 
 type DailyGoalInput struct {
 	Nutrients map[string]string `json:"nutrients"`
+	Note      *string           `json:"note"`
 }
 
 type ListNutritionRecordsOptions struct {
