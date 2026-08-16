@@ -65,8 +65,10 @@ func (app *application) writeJSONWithNotices(ctx context.Context, payload any, c
 	return encoder.Encode(envelope)
 }
 
-func (app *application) writeHumanNotices(ctx context.Context) {
-	notices := app.notices(ctx)
+func (app *application) writeHumanNotices(ctx context.Context, commandNotices ...notice) {
+	notices := make([]notice, 0, len(commandNotices)+1)
+	notices = append(notices, commandNotices...)
+	notices = append(notices, app.notices(ctx)...)
 	if len(notices) == 0 {
 		return
 	}

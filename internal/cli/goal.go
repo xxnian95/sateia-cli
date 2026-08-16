@@ -17,6 +17,11 @@ type goalSetOptions struct {
 	note         string
 }
 
+var dailyGoalNoteRecommendedNotice = notice{
+	Code:    "DAILY_GOAL_NOTE_RECOMMENDED",
+	Message: "Consider providing --note when setting a daily goal so its context and intent are easier to trace later.",
+}
+
 func (app *application) newGoalCommand() *cobra.Command {
 	command := &cobra.Command{
 		Use:   "goal",
@@ -111,6 +116,9 @@ instructions.`,
 			if err != nil {
 				return fmt.Errorf("set daily goal failed: %w", err)
 			}
+			if note == nil {
+				return app.printDailyGoal(command, goal, metadata, app.jsonOutput, dailyGoalNoteRecommendedNotice)
+			}
 			return app.printDailyGoal(command, goal, metadata, app.jsonOutput)
 		},
 	}
@@ -184,12 +192,12 @@ func (app *application) authenticatedAPIClient() (*api.Client, error) {
 	return api.NewClient(baseURL, token, app.version, nil)
 }
 
-func (app *application) printDailyGoal(command *cobra.Command, goal api.DailyGoal, metadata api.ResponseMetadata, jsonOutput bool) error {
+func (app *application) printDailyGoal(command *cobra.Command, goal api.DailyGoal, metadata api.ResponseMetadata, jsonOutput bool, commandNotices ...notice) error {
 	if jsonOutput {
-		return app.writeJSON(command.Context(), struct {
+		return app.writeJSONWithNotices(command.Context(), struct {
 			RequestID string        `json:"request_id"`
 			DailyGoal api.DailyGoal `json:"daily_goal"`
-		}{metadata.RequestID, goal})
+		}{metadata.RequestID, goal}, commandNotices...)
 	}
 	fmt.Fprintf(app.out, "Daily goal.\ngoal_date: %s\nenergy_kcal: %s\nprotein_g: %s\ncarbohydrate_g: %s\nfat_g: %s\n", goal.GoalDate, goal.Nutrients["energy"], goal.Nutrients["protein"], goal.Nutrients["carbohydrate"], goal.Nutrients["fat"])
 	if goal.Note != nil {
@@ -197,6 +205,9 @@ func (app *application) printDailyGoal(command *cobra.Command, goal api.DailyGoa
 	}
 	if metadata.RequestID != "" {
 		fmt.Fprintf(app.out, "request_id: %s\n", metadata.RequestID)
+	}
+	if len(commandNotices) > 0 {
+		app.writeHumanNotices(command.Context(), commandNotices...)
 	}
 	return nil
 }
