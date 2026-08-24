@@ -142,7 +142,7 @@ consumed_at: %s
 	flags.StringVar(&options.protein, "protein", "", "total replacement protein grams as a non-negative decimal; requires all nutrient flags")
 	flags.StringVar(&options.carbohydrate, "carbohydrate", "", "total replacement carbohydrate grams as a non-negative decimal; requires all nutrient flags")
 	flags.StringVar(&options.fat, "fat", "", "total replacement fat grams as a non-negative decimal; requires all nutrient flags")
-	flags.StringVar(&options.note, "note", "", "exact replacement note up to 500 characters; food name and quantity should come first")
+	flags.StringVar(&options.note, "note", "", "exact replacement note up to 5,000 characters; food name and quantity should come first")
 	flags.BoolVar(&options.clearNote, "clear-note", false, "replace the note with null; mutually exclusive with --note")
 	flags.StringVar(&options.consumedAt, "consumed-at", "", "actual replacement consumption time as RFC 3339 with its original UTC offset")
 	for _, name := range []string{"record-id", "expected-version"} {
@@ -208,8 +208,8 @@ func buildUpdateRequest(options updateOptions, selection updateSelection) (api.U
 		return api.UpdateRecordRequest{}, "", errors.New("--note and --clear-note are mutually exclusive")
 	}
 	if selection.note {
-		if len([]rune(options.note)) > 500 {
-			return api.UpdateRecordRequest{}, "", errors.New("--note must contain at most 500 characters")
+		if len([]rune(options.note)) > maxNoteLength {
+			return api.UpdateRecordRequest{}, "", errors.New("--note must contain at most 5,000 characters")
 		}
 		note := options.note
 		request.Note = api.OptionalString{Set: true, Value: &note}

@@ -14,6 +14,12 @@ type goalSetOptions struct {
 	protein      string
 	carbohydrate string
 	fat          string
+	note         string
+}
+
+var dailyGoalNoteRecommendedNotice = notice{
+	Code:    "DAILY_GOAL_NOTE_RECOMMENDED",
+	Message: "Consider providing --note when setting a daily goal so its context and intent are easier to trace later.",
 }
 
 func (app *application) newGoalCommand() *cobra.Command {
@@ -73,7 +79,9 @@ func (app *application) newGoalSetCommand() *cobra.Command {
 DATE must be a valid yyyy-MM-dd value, such as 2026-08-09, with no time or
 time-zone semantics. Supply all four goals as plain non-negative decimals with
 at most six fractional digits. Energy is in kilocalories; protein,
-carbohydrate, and fat are in grams. Do not include unit suffixes.
+carbohydrate, and fat are in grams. Do not include unit suffixes. An optional
+note may contain at most 5,000 characters. Because this command replaces the
+complete goal, omitting --note clears any existing note.
 
 AI agents: immediately before every set operation, run
 "sateia goal set --help" again. Installed CLI updates may change these
@@ -93,13 +101,23 @@ instructions.`,
 					return fmt.Errorf("--%s must be a non-negative decimal with at most six fractional digits", name)
 				}
 			}
+			if len([]rune(options.note)) > maxNoteLength {
+				return errors.New("--note must contain at most 5,000 characters")
+			}
+			var note *string
+			if command.Flags().Changed("note") {
+				note = &options.note
+			}
 			client, err := app.authenticatedAPIClient()
 			if err != nil {
 				return err
 			}
-			goal, metadata, err := client.PutDailyGoal(command.Context(), date, api.DailyGoalInput{Nutrients: nutrients})
+			goal, metadata, err := client.PutDailyGoal(command.Context(), date, api.DailyGoalInput{Nutrients: nutrients, Note: note})
 			if err != nil {
 				return fmt.Errorf("set daily goal failed: %w", err)
+			}
+			if note == nil {
+				return app.printDailyGoal(command, goal, metadata, app.jsonOutput, dailyGoalNoteRecommendedNotice)
 			}
 			return app.printDailyGoal(command, goal, metadata, app.jsonOutput)
 		},
@@ -110,6 +128,7 @@ instructions.`,
 	flags.StringVar(&options.protein, "protein", "", "protein gram goal as a non-negative decimal without a unit suffix (required)")
 	flags.StringVar(&options.carbohydrate, "carbohydrate", "", "carbohydrate gram goal as a non-negative decimal without a unit suffix (required)")
 	flags.StringVar(&options.fat, "fat", "", "fat gram goal as a non-negative decimal without a unit suffix (required)")
+	flags.StringVar(&options.note, "note", "", "optional note up to 5,000 characters; omission clears the existing note")
 	for _, name := range []string{"energy", "protein", "carbohydrate", "fat"} {
 		_ = command.MarkFlagRequired(name)
 	}
@@ -173,16 +192,22 @@ func (app *application) authenticatedAPIClient() (*api.Client, error) {
 	return api.NewClient(baseURL, token, app.version, nil)
 }
 
-func (app *application) printDailyGoal(command *cobra.Command, goal api.DailyGoal, metadata api.ResponseMetadata, jsonOutput bool) error {
+func (app *application) printDailyGoal(command *cobra.Command, goal api.DailyGoal, metadata api.ResponseMetadata, jsonOutput bool, commandNotices ...notice) error {
 	if jsonOutput {
-		return app.writeJSON(command.Context(), struct {
+		return app.writeJSONWithNotices(command.Context(), struct {
 			RequestID string        `json:"request_id"`
 			DailyGoal api.DailyGoal `json:"daily_goal"`
-		}{metadata.RequestID, goal})
+		}{metadata.RequestID, goal}, commandNotices...)
 	}
 	fmt.Fprintf(app.out, "Daily goal.\ngoal_date: %s\nenergy_kcal: %s\nprotein_g: %s\ncarbohydrate_g: %s\nfat_g: %s\n", goal.GoalDate, goal.Nutrients["energy"], goal.Nutrients["protein"], goal.Nutrients["carbohydrate"], goal.Nutrients["fat"])
+	if goal.Note != nil {
+		fmt.Fprintf(app.out, "note: %s\n", *goal.Note)
+	}
 	if metadata.RequestID != "" {
 		fmt.Fprintf(app.out, "request_id: %s\n", metadata.RequestID)
+	}
+	if len(commandNotices) > 0 {
+		app.writeHumanNotices(command.Context(), commandNotices...)
 	}
 	return nil
 }
